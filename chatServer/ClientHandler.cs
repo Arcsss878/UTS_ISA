@@ -66,6 +66,9 @@ namespace UTS_ISA.users
 
             writer.WriteLine("LOGIN_SUCCESS");
 
+            string userList = string.Join(",", ClientManager.GetAllUsers());
+            writer.WriteLine("USERS|" + userList);
+
             Console.WriteLine(username + " connected");
         }
 

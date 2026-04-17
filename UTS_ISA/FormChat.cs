@@ -47,17 +47,18 @@ namespace UTS_ISA
                 try
                 {
                     string data = reader.ReadLine();
+                    if (string.IsNullOrEmpty(data)) continue;
                     string[] parts = data.Split('|');
 
                     Invoke(new Action(() =>
                     {
                         if (parts[0] == "MSG")
                         {
-                            txtChat.AppendText(parts[1] + ": " + parts[2] + Environment.NewLine);
+                            lstRiwayat.Items.Add(parts[1] + ": " + parts[2] + Environment.NewLine);
                         }
                         else if (parts[0] == "USERS")
                         {
-                            lstRiwayat.Items.Clear();
+                            lstUser.Items.Clear();
                             string[] users = parts[1].Split(',');
 
                             foreach (var u in users)
@@ -82,11 +83,11 @@ namespace UTS_ISA
             }
 
             string target = lstUser.SelectedItem.ToString();
-            string msg = lstRiwayat.Text;
+            string msg = txtChat.Text;
 
             writer.WriteLine($"CHAT|{username}|{target}|{msg}");
 
-            txtChat.AppendText("Me -> " + target + ": " + msg + Environment.NewLine);
+            lstRiwayat.Items.Add("Me -> " + target + ": " + msg);
 
             txtChat.Clear();
         }
