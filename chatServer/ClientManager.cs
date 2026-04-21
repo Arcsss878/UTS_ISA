@@ -1,52 +1,79 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Net.Sockets;
 
 namespace UTS_ISA.users
 {
-    public class ClientManager
+    public class ClientInfo
     {
-        public static Dictionary<string, TcpClient> clients = new Dictionary<string, TcpClient>();
+        public TcpClient TcpClient { get; set; }
+        public System.IO.StreamWriter Writer { get; set; }
+        public byte[] AesKey { get; set; }
+        public byte[] AesIv { get; set; }
+        public string Role { get; set; }
+    }
 
-        public static void AddClient(string username, TcpClient client)
+    public static class ClientManager
+    {
+        private static readonly Dictionary<string, ClientInfo> clients = new Dictionary<string, ClientInfo>();
+
+        public static void AddClient(string username, ClientInfo info)
         {
-            clients[username] = client;
+            lock (clients)
+            {
+                clients[username] = info;
+            }
             BroadcastUsers();
         }
 
         public static void RemoveClient(string username)
         {
-            if (clients.ContainsKey(username))
+            lock (clients)
             {
-                clients.Remove(username);
-                BroadcastUsers();
+                if (clients.ContainsKey(username))
+                    clients.Remove(username);
+            }
+            BroadcastUsers();
+        }
+
+        public static ClientInfo GetClientInfo(string username)
+        {
+            lock (clients)
+            {
+                return clients.ContainsKey(username) ? clients[username] : null;
             }
         }
 
         public static TcpClient GetClient(string username)
         {
-            return clients.ContainsKey(username) ? clients[username] : null;
+            lock (clients)
+            {
+                return clients.ContainsKey(username) ? clients[username].TcpClient : null;
+            }
         }
 
         public static List<string> GetAllUsers()
         {
-            return clients.Keys.ToList();
+            lock (clients)
+            {
+                return new List<string>(clients.Keys);
+            }
         }
 
         public static void BroadcastUsers()
         {
-            string userList = string.Join(",", clients.Keys);
+            string userList;
+            List<ClientInfo> infos;
 
-            foreach (var client in clients.Values)
+            lock (clients)
             {
-                try
-                {
-                    var writer = new System.IO.StreamWriter(client.GetStream()) { AutoFlush = true };
-                    writer.WriteLine("USERS|" + userList);
-                }
+                userList = string.Join(",", clients.Keys);
+                infos = new List<ClientInfo>(clients.Values);
+            }
+
+            foreach (var info in infos)
+            {
+                try { info.Writer.WriteLine("USERS|" + userList); }
                 catch { }
             }
         }
