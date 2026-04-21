@@ -48,16 +48,29 @@ namespace UTS_ISA
                 try
                 {
                     string data = reader.ReadLine();
+<<<<<<< HEAD
                     if (data == null) break;
 
+=======
+                    if (string.IsNullOrEmpty(data)) continue;
+>>>>>>> 29d85add0cd96c69e6a47fc2e22e9878dca480f8
                     string[] parts = data.Split('|');
 
                     Invoke(new Action(() =>
                     {
                         if (parts[0] == "MSG" && parts.Length >= 3)
                         {
+<<<<<<< HEAD
                             string from         = parts[1];
                             string encryptedMsg = parts[2];
+=======
+                            lstRiwayat.Items.Add(parts[1] + ": " + parts[2] + Environment.NewLine);
+                        }
+                        else if (parts[0] == "USERS")
+                        {
+                            lstUser.Items.Clear();
+                            string[] users = parts[1].Split(',');
+>>>>>>> 29d85add0cd96c69e6a47fc2e22e9878dca480f8
 
                             string plainMsg = CryptoHelper.AesDecrypt(encryptedMsg, aesKey, aesIv);
                             lstRiwayat.Items.Add($"[{DateTime.Now:HH:mm}] {from}: {plainMsg}");
@@ -87,16 +100,25 @@ namespace UTS_ISA
                 return;
             }
 
+<<<<<<< HEAD
             string msg = txtChat.Text.Trim();
             if (string.IsNullOrEmpty(msg)) return;
+=======
+            string target = lstUser.SelectedItem.ToString();
+            string msg = txtChat.Text;
+>>>>>>> 29d85add0cd96c69e6a47fc2e22e9878dca480f8
 
             string target       = lstUser.SelectedItem.ToString();
             string encryptedMsg = CryptoHelper.AesEncrypt(msg, aesKey, aesIv);
 
+<<<<<<< HEAD
             writer.WriteLine($"CHAT|{username}|{target}|{encryptedMsg}");
 
             lstRiwayat.Items.Add($"[{DateTime.Now:HH:mm}] Me → {target}: {msg}");
             lstRiwayat.TopIndex = lstRiwayat.Items.Count - 1;
+=======
+            lstRiwayat.Items.Add("Me -> " + target + ": " + msg);
+>>>>>>> 29d85add0cd96c69e6a47fc2e22e9878dca480f8
 
             txtChat.Clear();
             txtChat.Focus();

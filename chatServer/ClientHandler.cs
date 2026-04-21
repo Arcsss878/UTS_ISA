@@ -96,6 +96,7 @@ namespace UTS_ISA.users
 
             var (success, role) = DatabaseHelper.LoginUser(user, pwHash);
 
+<<<<<<< HEAD
             if (!success)
             {
                 writer.WriteLine("LOGIN_FAIL|Username atau password salah");
@@ -116,6 +117,12 @@ namespace UTS_ISA.users
             writer.WriteLine($"LOGIN_SUCCESS|{role}");
             ClientManager.AddClient(username, info);
             Console.WriteLine($"{username} ({role}) connected");
+=======
+            string userList = string.Join(",", ClientManager.GetAllUsers());
+            writer.WriteLine("USERS|" + userList);
+
+            Console.WriteLine(username + " connected");
+>>>>>>> 29d85add0cd96c69e6a47fc2e22e9878dca480f8
         }
 
         private void HandleChat(string[] parts)
