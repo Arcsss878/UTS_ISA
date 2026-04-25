@@ -12,12 +12,75 @@ namespace UTS_ISA
 {
     // ════════════════════════════════════════════════════════════════════════════
     //  DATABASE HELPER
+    //
+    //  Mengelola semua operasi MySQL: users, messages, sessions.
+    //
+    //  LAPISAN ENKRIPSI (3 lapis):
+    //  ┌─────────────────────────────────────────────────────────────────────┐
+    //  │  Layer 1 — Transit (AES session key per client)                     │
+    //  │    Pesan di jaringan dienkripsi AES-256 dengan key unik per sesi.   │
+    //  │    Disadap pun tidak bisa dibaca.                                   │
+    //  │                                                                     │
+    //  │  Layer 2 — DB kolom message_encrypted (AES session key sender)      │
+    //  │    Ciphertext asli dari sender disimpan sebagai audit trail.        │
+    //  │    Hanya bisa dibuka dengan AES key milik sender (sudah hilang      │
+    //  │    setelah sesi berakhir) → tidak bisa dibuka siapapun.             │
+    //  │                                                                     │
+    //  │  Layer 3 — DB kolom message_plain (AES server DB key)  ← BARU      │
+    //  │    Plaintext ikut dienkripsi pakai fixed server key sebelum         │
+    //  │    disimpan ke DB. Siapapun yang buka phpMyAdmin tidak akan         │
+    //  │    bisa membaca isi pesan. Server decrypt dulu saat perlu           │
+    //  │    mengirim pesan ke recipient (offline delivery / history).        │
+    //  └─────────────────────────────────────────────────────────────────────┘
     // ════════════════════════════════════════════════════════════════════════════
     public static class ServerDb
     {
         // Ganti Pwd= jika MySQL kamu pakai password
         private const string ConnStr =
             "Server=localhost;Database=secure_chat;Uid=root;Pwd=;";
+
+        // ── Server-side DB encryption key (Layer 3) ───────────────────────────
+        //
+        // Key ini KHUSUS untuk enkripsi data di database, berbeda dengan
+        // AES session key yang dipakai untuk enkripsi pesan di jaringan.
+        //
+        // _dbKey : di-derive dari passphrase tetap menggunakan SHA-256
+        //          hasil = 32 byte (256-bit AES key)
+        // _dbIv  : fixed IV 16 byte (hardcoded)
+        //
+        // Kenapa pakai SHA-256 untuk derive key?
+        //   Agar key selalu sama setiap kali server restart, tapi tidak
+        //   perlu disimpan as-is di kode (lebih aman dari hardcode langsung).
+        //
+        // PENTING: Ganti passphrase "UTS_ISA_SECURE_DB_KEY_2024" dengan
+        //   string rahasia sendiri sebelum deploy ke production.
+        private static readonly byte[] _dbKey;
+        private static readonly byte[] _dbIv = new byte[]
+        {
+            0x55,0x54,0x53,0x5F,0x49,0x53,0x41,0x5F,  // "UTS_ISA_"
+            0x32,0x30,0x32,0x34,0x00,0x00,0x00,0x00   // "2024\0\0\0\0"
+        };
+
+        static ServerDb()
+        {
+            // Derive 256-bit DB key dari passphrase menggunakan SHA-256
+            using (var sha = SHA256.Create())
+                _dbKey = sha.ComputeHash(Encoding.UTF8.GetBytes("UTS_ISA_SECURE_DB_KEY_2024"));
+        }
+
+        /// <summary>Enkripsi plaintext dengan server DB key sebelum disimpan ke DB.</summary>
+        private static string DbEncrypt(string plain)
+            => CryptoHelper.AesEncrypt(plain, _dbKey, _dbIv);
+
+        /// <summary>
+        /// Dekripsi data dari kolom message_plain di DB.
+        /// Jika gagal (misal data lama yang belum terenkripsi), kembalikan string kosong.
+        /// </summary>
+        private static string DbDecrypt(string cipher)
+        {
+            try { return CryptoHelper.AesDecrypt(cipher, _dbKey, _dbIv); }
+            catch { return ""; } // data lama (plaintext) tidak bisa di-decrypt → skip
+        }
 
         // ── User ──────────────────────────────────────────────────────────────
 
@@ -93,8 +156,12 @@ namespace UTS_ISA
                     cmd.Parameters.AddWithValue("@u", username);
                     var r = cmd.ExecuteReader();
                     while (r.Read())
-                        list.Add((r.GetString(0), r.GetString(1),
-                                  r.GetString(2), r.GetDateTime(3).ToString("HH:mm")));
+                    {
+                        string plain = DbDecrypt(r.GetString(2)); // dekripsi dari DB key
+                        if (!string.IsNullOrEmpty(plain))
+                            list.Add((r.GetString(0), r.GetString(1),
+                                      plain, r.GetDateTime(3).ToString("HH:mm")));
+                    }
                 }
             }
             catch { }
@@ -121,7 +188,9 @@ namespace UTS_ISA
                     cmd.Parameters.AddWithValue("@s",     sender);
                     cmd.Parameters.AddWithValue("@r",     receiver);
                     cmd.Parameters.AddWithValue("@enc",   encMsg);
-                    cmd.Parameters.AddWithValue("@plain", plain);
+                    // Enkripsi plaintext dengan server DB key sebelum disimpan
+                    // → DB tidak pernah menyimpan plaintext yang bisa dibaca langsung
+                    cmd.Parameters.AddWithValue("@plain", DbEncrypt(plain));
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -147,9 +216,11 @@ namespace UTS_ISA
                     var r = cmd.ExecuteReader();
                     while (r.Read())
                     {
-                        string plain = r.IsDBNull(1) ? "" : r.GetString(1);
-                        list.Add((r.GetString(0), plain,
-                                  r.GetDateTime(2).ToString("HH:mm")));
+                        string raw   = r.IsDBNull(1) ? "" : r.GetString(1);
+                        string plain = DbDecrypt(raw); // dekripsi dari DB key
+                        if (!string.IsNullOrEmpty(plain))
+                            list.Add((r.GetString(0), plain,
+                                      r.GetDateTime(2).ToString("HH:mm")));
                     }
                 }
                 // Tandai semua sudah terkirim
