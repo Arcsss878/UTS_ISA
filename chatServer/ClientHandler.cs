@@ -32,7 +32,6 @@ namespace UTS_ISA.users
         {
             new Thread(Run) { IsBackground = true }.Start();
         }
-
         private void Run()
         {
             try
@@ -62,9 +61,10 @@ namespace UTS_ISA.users
                     string[] parts = data.Split('|');
                     switch (parts[0])
                     {
-                        case "REGISTER": HandleRegister(parts); break;
-                        case "LOGIN":    HandleLogin(parts);    break;
-                        case "CHAT":     HandleChat(parts);     break;
+                        case "REGISTER":      HandleRegister(parts);      break;
+                        case "LOGIN":         HandleLogin(parts);         break;
+                        case "CHAT":          HandleChat(parts);          break;
+                        case "TOKEN_REFRESH": HandleTokenRefresh(parts);  break;
                     }
                 }
             }
@@ -96,7 +96,7 @@ namespace UTS_ISA.users
 
             var (success, role) = DatabaseHelper.LoginUser(user, pwHash);
 
-<<<<<<< HEAD
+
             if (!success)
             {
                 writer.WriteLine("LOGIN_FAIL|Username atau password salah");
@@ -104,43 +104,75 @@ namespace UTS_ISA.users
             }
 
             username = user;
+
+            // Generate session token (berlaku 1 jam)
+            string   token  = Guid.NewGuid().ToString("N");
+            DateTime expiry = DateTime.Now.AddHours(1);
+
             var info = new ClientInfo
             {
-                TcpClient = client,
-                Writer    = writer,
-                AesKey    = aesKey,
-                AesIv     = aesIv,
-                Role      = role
+                TcpClient    = client,
+                Writer       = writer,
+                AesKey       = aesKey,
+                AesIv        = aesIv,
+                Role         = role,
+                SessionToken = token,
+                TokenExpiry  = expiry
             };
 
-            // Kirim LOGIN_SUCCESS dulu sebelum AddClient agar USERS broadcast tidak kebaca duluan
-            writer.WriteLine($"LOGIN_SUCCESS|{role}");
+            // Kirim LOGIN_SUCCESS + token + expiry dulu sebelum AddClient (hindari race condition)
+            writer.WriteLine($"LOGIN_SUCCESS|{role}|{token}|{expiry:HH:mm:ss}");
             ClientManager.AddClient(username, info);
-            Console.WriteLine($"{username} ({role}) connected");
-=======
-            string userList = string.Join(",", ClientManager.GetAllUsers());
-            writer.WriteLine("USERS|" + userList);
 
-            Console.WriteLine(username + " connected");
->>>>>>> 29d85add0cd96c69e6a47fc2e22e9878dca480f8
+            // Kirim riwayat chat lengkap (history) sebagai HISTORY|sender|receiver|enc|time
+            foreach (var (s, r, plain, t) in DatabaseHelper.GetAllMessages(username))
+            {
+                string reEnc = CryptoHelper.AesEncrypt(plain, aesKey, aesIv);
+                writer.WriteLine($"HISTORY|{s}|{r}|{reEnc}|{t}");
+            }
+
+            // Kirim pesan pending (offline) sebagai MSG biasa
+            foreach (var (sender, plain, sentAt) in DatabaseHelper.GetPendingMessages(username))
+            {
+                string reEnc = CryptoHelper.AesEncrypt(plain, aesKey, aesIv);
+                writer.WriteLine($"MSG|{sender}|{reEnc}|{sentAt}");
+            }
+
+            Console.WriteLine($"{username} ({role}) connected");
+
         }
 
         private void HandleChat(string[] parts)
         {
-            // CHAT|from|to|<aes_encrypted_message>
-            if (parts.Length < 4) return;
+            // CHAT|from|to|<aes_encrypted_message>|token
+            if (parts.Length < 5) return;
 
             string from       = parts[1];
             string to         = parts[2];
             string encMsg     = parts[3];
+            string token      = parts[4];
+
+            // Validasi session token
+            ClientInfo senderInfo = ClientManager.GetClientInfo(from);
+            if (senderInfo == null || senderInfo.SessionToken != token)
+            {
+                writer.WriteLine("ERROR|Session tidak valid, silakan login ulang.");
+                return;
+            }
+            if (DateTime.Now > senderInfo.TokenExpiry)
+            {
+                writer.WriteLine("ERROR|Session expired, silakan login ulang.");
+                ClientManager.RemoveClient(from);
+                return;
+            }
 
             // Dekripsi pesan dari sender
             string plainText = CryptoHelper.AesDecrypt(encMsg, aesKey, aesIv);
 
-            // Simpan ke DB (simpan versi terenkripsi)
-            DatabaseHelper.SaveMessage(from, to, encMsg);
+            // Simpan ke DB (enkripsi + plain untuk delivery offline)
+            DatabaseHelper.SaveMessage(from, to, encMsg, plainText);
 
-            // Re-enkripsi pakai AES key milik recipient, lalu forward
+            // Forward ke recipient kalau sedang online
             ClientInfo recipientInfo = ClientManager.GetClientInfo(to);
             if (recipientInfo != null)
             {
@@ -148,6 +180,29 @@ namespace UTS_ISA.users
                 try { recipientInfo.Writer.WriteLine($"MSG|{from}|{reEncrypted}"); }
                 catch { }
             }
+            // Kalau offline: pesan tersimpan di DB, akan terkirim saat target online (tidak ada notif error)
+        }
+
+        private void HandleTokenRefresh(string[] parts)
+        {
+            // TOKEN_REFRESH|username|old_token
+            if (parts.Length < 3) return;
+            string user     = parts[1];
+            string oldToken = parts[2];
+
+            ClientInfo info = ClientManager.GetClientInfo(user);
+            if (info == null || info.SessionToken != oldToken)
+            {
+                writer.WriteLine("TOKEN_REFRESH_FAIL|Session tidak valid.");
+                return;
+            }
+
+            string   newToken  = Guid.NewGuid().ToString("N");
+            DateTime newExpiry = DateTime.Now.AddHours(1);
+            info.SessionToken = newToken;
+            info.TokenExpiry  = newExpiry;
+
+            writer.WriteLine($"TOKEN_REFRESHED|{newToken}|{newExpiry:HH:mm:ss}");
         }
 
         private void Disconnect()
