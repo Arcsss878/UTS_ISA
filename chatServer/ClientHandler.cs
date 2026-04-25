@@ -166,21 +166,27 @@ namespace UTS_ISA.users
                 return;
             }
 
-            // Dekripsi pesan dari sender
+            // Dekripsi pesan dari sender (pakai AES key milik sender)
             string plainText = CryptoHelper.AesDecrypt(encMsg, aesKey, aesIv);
 
-            // Simpan ke DB (enkripsi + plain untuk delivery offline)
-            DatabaseHelper.SaveMessage(from, to, encMsg, plainText);
+            // Simpan ke DB dengan delivered=0, dapat ID row yang baru dibuat
+            long msgId = DatabaseHelper.SaveMessage(from, to, encMsg, plainText);
 
             // Forward ke recipient kalau sedang online
             ClientInfo recipientInfo = ClientManager.GetClientInfo(to);
             if (recipientInfo != null)
             {
-                string reEncrypted = CryptoHelper.AesEncrypt(plainText, recipientInfo.AesKey, recipientInfo.AesIv);
-                try { recipientInfo.Writer.WriteLine($"MSG|{from}|{reEncrypted}"); }
+                string reEncrypted = CryptoHelper.AesEncrypt(
+                    plainText, recipientInfo.AesKey, recipientInfo.AesIv);
+                try
+                {
+                    recipientInfo.Writer.WriteLine($"MSG|{from}|{reEncrypted}");
+                    // Recipient online dan berhasil menerima → tandai delivered=1
+                    DatabaseHelper.MarkDelivered(msgId);
+                }
                 catch { }
             }
-            // Kalau offline: pesan tersimpan di DB, akan terkirim saat target online (tidak ada notif error)
+            // Kalau offline: delivered=0, dikirim saat target login (via GetPendingMessages)
         }
 
         private void HandleTokenRefresh(string[] parts)

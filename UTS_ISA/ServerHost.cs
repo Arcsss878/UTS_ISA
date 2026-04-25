@@ -173,7 +173,24 @@ namespace UTS_ISA
         /// encMsg = ciphertext AES (untuk audit trail).
         /// plain  = plaintext  (untuk dikirim ulang saat recipient login offline).
         /// </summary>
-        public static void SaveMessage(string sender, string receiver,
+        /// <summary>
+        /// Simpan pesan ke DB dengan delivered=0 (belum terkirim ke penerima).
+        /// Mengembalikan ID row agar bisa di-update delivered=1 setelah forward berhasil.
+        ///
+        /// KOLOM delivered:
+        ///   0 = pesan "menunggu" di server, penerima belum menerimanya
+        ///       → terjadi saat penerima sedang OFFLINE
+        ///       → akan berubah ke 1 saat penerima login (via GetPending)
+        ///   1 = pesan sudah sampai ke penerima
+        ///       → terjadi saat penerima ONLINE dan forward berhasil (via MarkDelivered)
+        ///       → atau saat penerima login dan ambil pesan pending
+        ///
+        /// Analogi: seperti centang WhatsApp
+        ///   delivered=0 → ✓  (terkirim ke server, belum ke penerima)
+        ///   delivered=1 → ✓✓ (sudah diterima)
+        /// </summary>
+        /// <returns>ID row yang baru diinsert, atau -1 jika gagal</returns>
+        public static long SaveMessage(string sender, string receiver,
                                        string encMsg, string plain)
         {
             try
@@ -191,6 +208,34 @@ namespace UTS_ISA
                     // Enkripsi plaintext dengan server DB key sebelum disimpan
                     // → DB tidak pernah menyimpan plaintext yang bisa dibaca langsung
                     cmd.Parameters.AddWithValue("@plain", DbEncrypt(plain));
+                    cmd.ExecuteNonQuery();
+                    return cmd.LastInsertedId; // ID dipakai oleh MarkDelivered()
+                }
+            }
+            catch { return -1; }
+        }
+
+        /// <summary>
+        /// Update delivered=1 untuk pesan tertentu berdasarkan ID.
+        ///
+        /// Dipanggil di dua situasi:
+        ///   1. Recipient ONLINE  → dipanggil di HandleChat setelah Writer.WriteLine berhasil
+        ///   2. Recipient OFFLINE → dipanggil di GetPending setelah semua pesan dikirim
+        ///
+        /// Jika WriteLine gagal (koneksi putus mendadak), MarkDelivered tidak dipanggil
+        /// sehingga delivered tetap 0 → pesan akan dikirim ulang saat recipient login lagi.
+        /// </summary>
+        public static void MarkDelivered(long messageId)
+        {
+            if (messageId < 0) return;
+            try
+            {
+                using (var c = new MySqlConnection(ConnStr))
+                {
+                    c.Open();
+                    var cmd = new MySqlCommand(
+                        "UPDATE messages SET delivered=1 WHERE id=@id", c);
+                    cmd.Parameters.AddWithValue("@id", messageId);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -545,22 +590,30 @@ namespace UTS_ISA
                 return;
             }
 
-            // Dekripsi pesan dari sender
+            // Dekripsi pesan dari sender (pakai AES key milik sender)
             string plain = CryptoHelper.AesDecrypt(encMsg, _aesKey, _aesIv);
 
-            // Simpan ke DB (ciphertext + plaintext)
-            ServerDb.SaveMessage(from, to, encMsg, plain);
+            // Simpan ke DB dengan delivered=0, dapat ID row yang baru dibuat
+            long msgId = ServerDb.SaveMessage(from, to, encMsg, plain);
 
-            // Forward ke recipient jika online
+            // Forward ke recipient jika sedang online
             var recipient = ServerClients.Get(to);
             if (recipient != null)
             {
+                // Re-enkripsi dengan AES key milik recipient (key berbeda per sesi)
                 string reEnc = CryptoHelper.AesEncrypt(
                     plain, recipient.AesKey, recipient.AesIv);
-                try { recipient.Writer.WriteLine($"MSG|{from}|{reEnc}"); }
+                try
+                {
+                    recipient.Writer.WriteLine($"MSG|{from}|{reEnc}");
+                    // Recipient online dan berhasil menerima → tandai delivered=1
+                    ServerDb.MarkDelivered(msgId);
+                }
                 catch { }
+                // Jika WriteLine gagal (koneksi putus): delivered tetap 0
+                // → pesan akan dikirim ulang saat recipient login kembali
             }
-            // Jika offline: pesan tersimpan di DB, dikirim saat mereka login
+            // Jika offline: delivered=0, dikirim saat recipient login (via GetPending)
         }
 
         private void HandleTokenRefresh(string[] p)

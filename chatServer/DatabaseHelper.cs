@@ -108,7 +108,19 @@ namespace UTS_ISA.users
             return list;
         }
 
-        public static void SaveMessage(string sender, string receiver, string encryptedMessage, string plainMessage)
+        /// <summary>
+        /// Simpan pesan ke DB dengan delivered=0 (belum terkirim ke penerima).
+        ///
+        /// KOLOM delivered:
+        ///   0 = pesan menunggu di server, penerima belum menerimanya (offline)
+        ///       Selama penerima offline, nilai tetap 0.
+        ///       Berubah ke 1 saat penerima login dan ambil pesan pending.
+        ///   1 = pesan sudah sampai ke penerima
+        ///       Langsung di-set saat penerima online dan forward berhasil.
+        /// </summary>
+        /// <returns>ID row yang baru diinsert, atau -1 jika gagal</returns>
+        public static long SaveMessage(string sender, string receiver,
+                                       string encryptedMessage, string plainMessage)
         {
             try
             {
@@ -116,12 +128,39 @@ namespace UTS_ISA.users
                 {
                     conn.Open();
                     var cmd = new MySqlCommand(
-                        "INSERT INTO messages (sender, receiver, message_encrypted, message_plain, sent_at, delivered) VALUES (@s, @r, @enc, @plain, NOW(), 0)", conn);
-                    cmd.Parameters.AddWithValue("@s", sender);
-                    cmd.Parameters.AddWithValue("@r", receiver);
-                    cmd.Parameters.AddWithValue("@enc", encryptedMessage);
+                        "INSERT INTO messages (sender, receiver, message_encrypted, message_plain, sent_at, delivered)" +
+                        " VALUES (@s, @r, @enc, @plain, NOW(), 0)", conn);
+                    cmd.Parameters.AddWithValue("@s",     sender);
+                    cmd.Parameters.AddWithValue("@r",     receiver);
+                    cmd.Parameters.AddWithValue("@enc",   encryptedMessage);
                     // Enkripsi plaintext dengan server DB key sebelum disimpan
+                    // → DB tidak pernah menyimpan plaintext yang bisa dibaca langsung
                     cmd.Parameters.AddWithValue("@plain", DbEncrypt(plainMessage));
+                    cmd.ExecuteNonQuery();
+                    return cmd.LastInsertedId; // ID dipakai oleh MarkDelivered()
+                }
+            }
+            catch { return -1; }
+        }
+
+        /// <summary>
+        /// Update delivered=1 untuk pesan tertentu berdasarkan ID.
+        /// Dipanggil setelah pesan berhasil di-forward ke recipient yang online,
+        /// atau setelah pesan pending berhasil dikirim saat recipient login.
+        /// Jika gagal forward (koneksi putus), delivered tetap 0 sehingga
+        /// pesan akan dikirim ulang saat recipient login kembali.
+        /// </summary>
+        public static void MarkDelivered(long messageId)
+        {
+            if (messageId < 0) return;
+            try
+            {
+                using (var conn = new MySqlConnection(ConnStr))
+                {
+                    conn.Open();
+                    var cmd = new MySqlCommand(
+                        "UPDATE messages SET delivered=1 WHERE id=@id", conn);
+                    cmd.Parameters.AddWithValue("@id", messageId);
                     cmd.ExecuteNonQuery();
                 }
             }
