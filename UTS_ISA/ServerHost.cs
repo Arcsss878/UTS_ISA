@@ -452,215 +452,278 @@ namespace UTS_ISA
         {
             try
             {
-                // 1. Kirim RSA public key ke client
+                // ── STEP 1: Kirim RSA public key ke client ────────────────────
+                // Encode XML public key ke Base64 agar aman dikirim sebagai satu baris teks
+                // Format yang dikirim: PUBKEY|<base64 encoded XML RSA public key>
                 _writer.WriteLine("PUBKEY|" +
                     Convert.ToBase64String(Encoding.UTF8.GetBytes(_pubXml)));
 
-                // 2. Terima KEY_EXCHANGE: client mengirim AES key+IV
-                //    yang sudah di-enkripsi dengan RSA public key server
-                string keLine = _reader.ReadLine();
-                if (keLine == null || !keLine.StartsWith("KEY_EXCHANGE|")) return;
+                // ── STEP 2: Terima KEY_EXCHANGE dari client ───────────────────
+                // Client sudah punya RSA public key kita → client generate AES key+IV random
+                // → enkripsi AES key+IV pakai RSA public key → kirim kemari
+                string keLine = _reader.ReadLine(); // baca satu baris dari client
+                if (keLine == null || !keLine.StartsWith("KEY_EXCHANGE|")) return; // validasi format
 
-                string[] kp = keLine.Split('|');
-                _aesKey = CryptoHelper.RsaDecrypt(
-                              Convert.FromBase64String(kp[1]), _privXml);
-                _aesIv  = CryptoHelper.RsaDecrypt(
-                              Convert.FromBase64String(kp[2]), _privXml);
+                string[] kp = keLine.Split('|'); // pisah: ["KEY_EXCHANGE", "<base64 encKey>", "<base64 encIV>"]
 
-                // 3. Loop terima command dari client
+                // Dekripsi AES key + IV menggunakan RSA private key server
+                // Hanya server yang bisa melakukan ini karena hanya server yang punya private key
+                _aesKey = CryptoHelper.RsaDecrypt(Convert.FromBase64String(kp[1]), _privXml); // AES key 32 byte
+                _aesIv  = CryptoHelper.RsaDecrypt(Convert.FromBase64String(kp[2]), _privXml); // AES IV 16 byte
+                // Sekarang server tahu AES key+IV yang sama dengan client → siap enkripsi pesan
+
+                // ── STEP 3: Loop terima dan proses command dari client ────────
                 while (true)
                 {
-                    string line = _reader.ReadLine();
-                    if (line == null) break;
+                    string line = _reader.ReadLine(); // baca satu baris command dari client
+                    if (line == null) break;           // null = koneksi terputus → keluar loop
 
-                    string[] parts = line.Split('|');
+                    string[] parts = line.Split('|'); // pisah command dan argumennya
+
+                    // Dispatch ke handler yang sesuai berdasarkan kata pertama
                     switch (parts[0])
                     {
-                        case "REGISTER":      HandleRegister(parts);      break;
-                        case "LOGIN":         HandleLogin(parts);         break;
-                        case "CHAT":          HandleChat(parts);          break;
-                        case "TOKEN_REFRESH": HandleTokenRefresh(parts);  break;
+                        case "REGISTER":      HandleRegister(parts);      break; // proses registrasi
+                        case "LOGIN":         HandleLogin(parts);         break; // proses login
+                        case "CHAT":          HandleChat(parts);          break; // proses kirim pesan
+                        case "TOKEN_REFRESH": HandleTokenRefresh(parts);  break; // refresh token sesi
                     }
                 }
             }
-            catch { }
+            catch { } // koneksi putus mendadak (IOException/SocketException)
 
-            Disconnect();
+            Disconnect(); // bersihkan data client saat keluar loop
         }
 
-        // ── Handlers ──────────────────────────────────────────────────────────
-
+        // ════════════════════════════════════════════════════════════════════════
+        //  HANDLE REGISTER
+        //  Mendaftarkan user baru ke database.
+        //  Format command dari client: REGISTER|username|sha256_password
+        // ════════════════════════════════════════════════════════════════════════
         private void HandleRegister(string[] p)
         {
-            // Format: REGISTER|username|sha256_password
+            // Validasi: pastikan ada minimal 3 bagian (REGISTER|username|pwHash)
             if (p.Length < 3)
             {
-                _writer.WriteLine("REGISTER_FAIL|Format salah");
+                _writer.WriteLine("REGISTER_FAIL|Format salah"); // kirim error ke client
                 return;
             }
 
-            bool ok = ServerDb.Register(p[1], p[2]);
+            // Coba daftarkan ke DB; false jika username sudah dipakai (duplicate)
+            bool ok = ServerDb.Register(p[1], p[2]); // p[1]=username, p[2]=passwordHash
+
+            // Kirim hasil ke client
             _writer.WriteLine(ok
-                ? "REGISTER_SUCCESS"
-                : "REGISTER_FAIL|Username sudah dipakai");
+                ? "REGISTER_SUCCESS"                       // berhasil → client tampilkan sukses
+                : "REGISTER_FAIL|Username sudah dipakai"); // gagal → client tampilkan pesan error
         }
 
+        // ════════════════════════════════════════════════════════════════════════
+        //  HANDLE LOGIN
+        //  Verifikasi kredensial dan buat session token untuk user.
+        //  Format command dari client: LOGIN|username|sha256_password
+        // ════════════════════════════════════════════════════════════════════════
         private void HandleLogin(string[] p)
         {
-            // Format: LOGIN|username|sha256_password
+            // Validasi: pastikan ada minimal 3 bagian (LOGIN|username|pwHash)
             if (p.Length < 3)
             {
                 _writer.WriteLine("LOGIN_FAIL|Format salah");
                 return;
             }
 
-            var (ok, role) = ServerDb.Login(p[1], p[2]);
+            // Cek kombinasi username + passwordHash di DB
+            var (ok, role) = ServerDb.Login(p[1], p[2]); // p[1]=username, p[2]=passwordHash
             if (!ok)
             {
+                // Credentials tidak cocok → kirim FAIL ke client
                 _writer.WriteLine("LOGIN_FAIL|Username atau password salah");
                 return;
             }
 
-            _username = p[1];
+            _username = p[1]; // simpan username untuk dipakai handler lain (HandleChat, dll)
 
-            // Generate session token berlaku 1 jam
-            string   token  = Guid.NewGuid().ToString("N");
-            DateTime expiry = DateTime.Now.AddHours(1);
+            // Generate session token: GUID 32 karakter tanpa tanda hubung
+            // Contoh: "b541001d3a2f4c8e9d1f2a3b4c5d6e7f"
+            string   token  = Guid.NewGuid().ToString("N"); // "N" = tanpa tanda hubung
+            DateTime expiry = DateTime.Now.AddHours(1);     // token berlaku 1 jam dari sekarang
 
+            // Buat objek yang menyimpan semua info sesi client ini
             var info = new ServerClientInfo
             {
-                TcpClient    = _tcp,
-                Writer       = _writer,
-                AesKey       = _aesKey,
-                AesIv        = _aesIv,
-                Role         = role,
-                SessionToken = token,
-                TokenExpiry  = expiry
+                TcpClient    = _tcp,     // koneksi TCP client ini
+                Writer       = _writer,  // stream untuk kirim ke client ini
+                AesKey       = _aesKey,  // AES key unik sesi ini (dari key exchange)
+                AesIv        = _aesIv,   // AES IV unik sesi ini (dari key exchange)
+                Role         = role,     // "user" atau "admin"
+                SessionToken = token,    // token untuk validasi setiap CHAT command
+                TokenExpiry  = expiry    // waktu token kedaluwarsa
             };
 
-            // Kirim LOGIN_SUCCESS sebelum AddClient (hindari race condition USERS)
-            // Format: LOGIN_SUCCESS|role|token|expiry_time
-            _writer.WriteLine(
-                $"LOGIN_SUCCESS|{role}|{token}|{expiry:HH:mm:ss}");
+            // PENTING: Kirim LOGIN_SUCCESS SEBELUM ServerClients.Add()
+            // Jika Add() dulu → Broadcast() dipanggil → mungkin race condition dengan client lain
+            // Format yang dikirim: LOGIN_SUCCESS|role|token|expiry_time
+            _writer.WriteLine($"LOGIN_SUCCESS|{role}|{token}|{expiry:HH:mm:ss}");
 
+            // Daftarkan client ke manager → otomatis trigger Broadcast ALL_USERS ke semua online
             ServerClients.Add(_username, info);
 
-            // Catat session ke DB untuk audit trail
+            // Catat session ke tabel sessions di DB untuk audit trail keamanan
             ServerDb.LogSession(_username, token, expiry);
 
-            // Kirim riwayat chat lengkap (HISTORY) sebagai HISTORY|sender|receiver|enc|time
+            // Kirim riwayat chat lengkap dari DB ke client yang baru login
+            // Format tiap pesan: HISTORY|sender|receiver|encMsg|time
             foreach (var (s, r, plain, t) in ServerDb.GetAllMessages(_username))
             {
-                string reEnc = CryptoHelper.AesEncrypt(plain, _aesKey, _aesIv);
-                _writer.WriteLine($"HISTORY|{s}|{r}|{reEnc}|{t}");
+                string reEnc = CryptoHelper.AesEncrypt(plain, _aesKey, _aesIv); // enkripsi ulang pakai key client ini
+                _writer.WriteLine($"HISTORY|{s}|{r}|{reEnc}|{t}"); // kirim ke client
             }
 
-            // Kirim pesan yang masuk saat user offline
+            // Kirim pesan yang masuk saat user offline (delivered=0 di DB)
+            // Format tiap pesan: MSG|sender|encMsg|sentAt
             foreach (var (sender, plain, time) in ServerDb.GetPending(_username))
             {
-                if (string.IsNullOrEmpty(plain)) continue;
-                string reEnc = CryptoHelper.AesEncrypt(plain, _aesKey, _aesIv);
-                _writer.WriteLine($"MSG|{sender}|{reEnc}|{time}");
+                if (string.IsNullOrEmpty(plain)) continue; // skip jika dekripsi gagal
+                string reEnc = CryptoHelper.AesEncrypt(plain, _aesKey, _aesIv); // enkripsi ulang
+                _writer.WriteLine($"MSG|{sender}|{reEnc}|{time}"); // kirim sebagai MSG biasa
             }
+            // GetPending otomatis update delivered=1 setelah semua pesan diambil
 
-            Console.WriteLine($"[+] {_username} ({role}) connected");
+            Console.WriteLine($"[+] {_username} ({role}) connected"); // log di console server
         }
 
+        // ════════════════════════════════════════════════════════════════════════
+        //  HANDLE CHAT
+        //  Proses pesan yang dikirim client ke user lain.
+        //  Format command dari client: CHAT|from|to|aes_encrypted_msg|session_token
+        //
+        //  Alur:
+        //    1. Validasi session token (cegah spoofing / session expired)
+        //    2. Dekripsi pesan dari sender (pakai AES key sender)
+        //    3. Simpan ke DB terenkripsi (delivered=0)
+        //    4. Jika recipient online → re-enkripsi & forward → delivered=1
+        //    5. Jika recipient offline → delivered=0, kirim saat login
+        // ════════════════════════════════════════════════════════════════════════
         private void HandleChat(string[] p)
         {
-            // Format: CHAT|from|to|aes_encrypted_msg|session_token
-            if (p.Length < 5) return;
+            if (p.Length < 5) return; // validasi: harus ada 5 bagian
 
-            string from    = p[1];
-            string to      = p[2];
-            string encMsg  = p[3];
-            string token   = p[4];
+            string from   = p[1]; // username pengirim
+            string to     = p[2]; // username penerima
+            string encMsg = p[3]; // pesan terenkripsi AES (dengan key milik sender)
+            string token  = p[4]; // session token dari client (harus cocok dengan server)
 
-            // Validasi session token
-            var sender = ServerClients.Get(from);
+            // ── Validasi session token ────────────────────────────────────────
+            var sender = ServerClients.Get(from); // ambil info sender dari manager
+
+            // Cek: apakah token yang dikirim cocok dengan yang ada di server?
             if (sender == null || sender.SessionToken != token)
             {
                 _writer.WriteLine("ERROR|Session tidak valid, silakan login ulang.");
-                return;
+                return; // tolak pesan
             }
+
+            // Cek: apakah token sudah expired (lebih dari 1 jam)?
             if (DateTime.Now > sender.TokenExpiry)
             {
                 _writer.WriteLine("ERROR|Session expired, silakan login ulang.");
-                ServerClients.Remove(from);
+                ServerClients.Remove(from); // hapus dari daftar online
                 return;
             }
 
-            // Dekripsi pesan dari sender (pakai AES key milik sender)
+            // ── Dekripsi pesan dari sender ────────────────────────────────────
+            // _aesKey/_aesIv di sini adalah key milik pengirim (dari key exchange saat login)
             string plain = CryptoHelper.AesDecrypt(encMsg, _aesKey, _aesIv);
+            // plain = isi pesan yang bisa dibaca manusia (contoh: "halo, apa kabar?")
 
-            // Simpan ke DB dengan delivered=0, dapat ID row yang baru dibuat
-            long msgId = ServerDb.SaveMessage(from, to, encMsg, plain);
+            // ── Simpan ke DB ──────────────────────────────────────────────────
+            // encMsg  → kolom message_encrypted (audit trail)
+            // plain   → dienkripsi DB key → kolom message_plain
+            // delivered=0 → belum terkirim ke penerima
+            long msgId = ServerDb.SaveMessage(from, to, encMsg, plain); // dapat ID row baru
 
-            // Forward ke recipient jika sedang online
-            var recipient = ServerClients.Get(to);
-            if (recipient != null)
+            // ── Forward ke recipient jika online ──────────────────────────────
+            var recipient = ServerClients.Get(to); // null jika recipient sedang offline
+
+            if (recipient != null) // recipient sedang online
             {
-                // Re-enkripsi dengan AES key milik recipient (key berbeda per sesi)
+                // Re-enkripsi plaintext dengan AES key milik recipient
+                // (key berbeda tiap client, jadi harus re-enkripsi dulu)
                 string reEnc = CryptoHelper.AesEncrypt(
                     plain, recipient.AesKey, recipient.AesIv);
                 try
                 {
-                    recipient.Writer.WriteLine($"MSG|{from}|{reEnc}");
-                    // Recipient online dan berhasil menerima → tandai delivered=1
+                    recipient.Writer.WriteLine($"MSG|{from}|{reEnc}"); // kirim ke recipient
+
+                    // Forward berhasil → update delivered=1 (analogi: ✓✓ WhatsApp)
                     ServerDb.MarkDelivered(msgId);
                 }
                 catch { }
-                // Jika WriteLine gagal (koneksi putus): delivered tetap 0
+                // Jika WriteLine gagal (koneksi recipient putus mendadak):
+                // MarkDelivered tidak dipanggil → delivered tetap 0
                 // → pesan akan dikirim ulang saat recipient login kembali
             }
-            // Jika offline: delivered=0, dikirim saat recipient login (via GetPending)
+            // Jika offline: delivered=0 tetap, kirim via GetPending saat recipient login
         }
 
+        // ════════════════════════════════════════════════════════════════════════
+        //  HANDLE TOKEN REFRESH
+        //  Client meminta token baru sebelum token lama expired.
+        //  Format command dari client: TOKEN_REFRESH|username|old_token
+        // ════════════════════════════════════════════════════════════════════════
         private void HandleTokenRefresh(string[] p)
         {
-            // Format: TOKEN_REFRESH|username|old_token
-            if (p.Length < 3) return;
+            if (p.Length < 3) return; // validasi argumen
 
-            string user     = p[1];
-            string oldToken = p[2];
+            string user     = p[1]; // username yang minta refresh
+            string oldToken = p[2]; // token lama yang sedang dipakai client
 
+            // Ambil info client dan validasi token lama
             var info = ServerClients.Get(user);
             if (info == null || info.SessionToken != oldToken)
             {
+                // Token tidak cocok → session tidak valid
                 _writer.WriteLine("TOKEN_REFRESH_FAIL|Session tidak valid.");
                 return;
             }
 
-            // Generate token baru, perpanjang 1 jam
-            string   newToken  = Guid.NewGuid().ToString("N");
-            DateTime newExpiry = DateTime.Now.AddHours(1);
+            // Generate token baru + perpanjang expiry 1 jam lagi dari sekarang
+            string   newToken  = Guid.NewGuid().ToString("N"); // GUID baru yang unik
+            DateTime newExpiry = DateTime.Now.AddHours(1);     // 1 jam dari sekarang
 
+            // Update in-memory dengan token baru
             info.SessionToken = newToken;
             info.TokenExpiry  = newExpiry;
 
-            // Update audit log
-            ServerDb.InvalidateSession(oldToken);
-            ServerDb.LogSession(user, newToken, newExpiry);
+            // Update audit log di DB: invalidate token lama, catat token baru
+            ServerDb.InvalidateSession(oldToken); // tandai token lama is_valid=0
+            ServerDb.LogSession(user, newToken, newExpiry); // insert token baru
 
-            // Kirim token baru ke client
+            // Kirim konfirmasi ke client beserta token baru dan waktu expiry baru
             // Format: TOKEN_REFRESHED|newToken|newExpiry_time
-            _writer.WriteLine(
-                $"TOKEN_REFRESHED|{newToken}|{newExpiry:HH:mm:ss}");
+            _writer.WriteLine($"TOKEN_REFRESHED|{newToken}|{newExpiry:HH:mm:ss}");
         }
 
+        // ════════════════════════════════════════════════════════════════════════
+        //  DISCONNECT
+        //  Dipanggil saat koneksi client terputus (normal atau mendadak).
+        //  Hapus client dari daftar online → trigger broadcast ALL_USERS baru.
+        // ════════════════════════════════════════════════════════════════════════
         private void Disconnect()
         {
-            Console.WriteLine($"[-] {_username} disconnected");
-            if (!string.IsNullOrEmpty(_username))
+            Console.WriteLine($"[-] {_username} disconnected"); // log di console server
+
+            if (!string.IsNullOrEmpty(_username)) // hanya jika sudah login
             {
-                // Invalidate session saat disconnect
+                // Invalidate session token di DB (audit trail: tandai session berakhir)
                 var info = ServerClients.Get(_username);
                 if (info != null)
-                    ServerDb.InvalidateSession(info.SessionToken);
+                    ServerDb.InvalidateSession(info.SessionToken); // is_valid=0 di tabel sessions
 
+                // Hapus dari daftar online → otomatis trigger Broadcast ALL_USERS
                 ServerClients.Remove(_username);
             }
-            try { _tcp.Close(); } catch { }
+            try { _tcp.Close(); } catch { } // tutup koneksi TCP (abaikan error jika sudah tutup)
         }
     }
 

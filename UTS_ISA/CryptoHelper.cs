@@ -43,14 +43,14 @@ namespace UTS_ISA
         /// <returns>Ciphertext dalam format Base64</returns>
         public static string AesEncrypt(string plainText, byte[] key, byte[] iv)
         {
-            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })
-            using (var ms  = new MemoryStream())
-            using (var cs  = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
+            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv }) // buat AES dengan key+IV yang diberikan
+            using (var ms  = new MemoryStream())                                   // tempat menampung hasil enkripsi (byte array)
+            using (var cs  = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write)) // stream enkripsi, tulis → enkripsi otomatis
             {
-                byte[] data = Encoding.UTF8.GetBytes(plainText);
-                cs.Write(data, 0, data.Length);
-                cs.FlushFinalBlock();
-                return Convert.ToBase64String(ms.ToArray()); // kembalikan sebagai Base64 string
+                byte[] data = Encoding.UTF8.GetBytes(plainText); // konversi string ke byte array (UTF-8)
+                cs.Write(data, 0, data.Length);                  // tulis byte ke CryptoStream → otomatis dienkripsi
+                cs.FlushFinalBlock();                            // paksa flush + tambah padding PKCS7 di akhir blok
+                return Convert.ToBase64String(ms.ToArray());     // konversi hasil enkripsi (byte[]) ke Base64 string agar aman dikirim lewat teks
             }
         }
 
@@ -63,12 +63,12 @@ namespace UTS_ISA
         /// <returns>Plaintext asli</returns>
         public static string AesDecrypt(string cipherBase64, byte[] key, byte[] iv)
         {
-            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })
-            using (var ms  = new MemoryStream(Convert.FromBase64String(cipherBase64)))
-            using (var cs  = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read))
-            using (var sr  = new StreamReader(cs))
+            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })          // buat AES dengan key+IV yang SAMA saat enkripsi
+            using (var ms  = new MemoryStream(Convert.FromBase64String(cipherBase64)))      // decode Base64 → byte[], masukkan ke MemoryStream
+            using (var cs  = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read)) // stream dekripsi, baca → dekripsi otomatis
+            using (var sr  = new StreamReader(cs))                                          // baca hasil dekripsi sebagai teks UTF-8
             {
-                return sr.ReadToEnd();
+                return sr.ReadToEnd(); // baca seluruh plaintext hasil dekripsi
             }
         }
 
@@ -78,9 +78,10 @@ namespace UTS_ISA
         /// </summary>
         public static byte[] GenerateAesKey()
         {
-            byte[] key = new byte[32]; // 32 byte = 256 bit
-            using (var rng = new RNGCryptoServiceProvider()) rng.GetBytes(key);
-            return key;
+            byte[] key = new byte[32];                           // siapkan array 32 byte (256 bit) untuk AES-256
+            using (var rng = new RNGCryptoServiceProvider())
+                rng.GetBytes(key);                               // isi dengan byte acak cryptographically secure (bukan Math.Random biasa)
+            return key;                                          // kembalikan AES key 256-bit yang siap dipakai
         }
 
         /// <summary>
@@ -90,9 +91,10 @@ namespace UTS_ISA
         /// </summary>
         public static byte[] GenerateAesIv()
         {
-            byte[] iv = new byte[16]; // 16 byte = 128 bit
-            using (var rng = new RNGCryptoServiceProvider()) rng.GetBytes(iv);
-            return iv;
+            byte[] iv = new byte[16];                            // siapkan array 16 byte (128 bit) untuk AES IV
+            using (var rng = new RNGCryptoServiceProvider())
+                rng.GetBytes(iv);                                // isi dengan byte acak cryptographically secure
+            return iv;                                           // kembalikan IV 128-bit yang siap dipakai
         }
 
         // ════════════════════════════════════════════════════════════════════
@@ -128,10 +130,11 @@ namespace UTS_ISA
         /// <returns>Data terenkripsi dalam bentuk byte array</returns>
         public static byte[] RsaEncrypt(byte[] data, string publicKeyXml)
         {
-            using (var rsa = new RSACryptoServiceProvider(2048))
+            using (var rsa = new RSACryptoServiceProvider(2048)) // buat RSA instance dengan key size 2048-bit
             {
-                rsa.FromXmlString(publicKeyXml);
-                return rsa.Encrypt(data, true); // true = pakai OAEP padding
+                rsa.FromXmlString(publicKeyXml); // load public key dari format XML string yang dikirim server
+                return rsa.Encrypt(data, true);  // enkripsi data, true = pakai OAEP padding (lebih aman dari PKCS#1 v1.5)
+                // OAEP = Optimal Asymmetric Encryption Padding → standar keamanan modern
             }
         }
 
@@ -144,10 +147,11 @@ namespace UTS_ISA
         /// <returns>Data asli (AES key atau IV)</returns>
         public static byte[] RsaDecrypt(byte[] data, string privateKeyXml)
         {
-            using (var rsa = new RSACryptoServiceProvider(2048))
+            using (var rsa = new RSACryptoServiceProvider(2048)) // buat RSA instance dengan key size 2048-bit
             {
-                rsa.FromXmlString(privateKeyXml);
-                return rsa.Decrypt(data, true); // true = pakai OAEP padding
+                rsa.FromXmlString(privateKeyXml); // load private key dari format XML string (hanya server yang punya ini)
+                return rsa.Decrypt(data, true);   // dekripsi data, true = pakai OAEP padding (harus sama dengan saat enkripsi)
+                // Hanya bisa berhasil jika privateKey adalah pasangan dari publicKey yang dipakai saat enkripsi
             }
         }
 
@@ -176,10 +180,16 @@ namespace UTS_ISA
         /// <returns>Hash dalam format lowercase hex string (64 karakter)</returns>
         public static string Sha256Hash(string input)
         {
-            using (var sha = SHA256.Create())
+            using (var sha = SHA256.Create()) // buat instance SHA-256
             {
                 byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
-                return BitConverter.ToString(bytes).Replace("-", "").ToLower();
+                // Encoding.UTF8.GetBytes(input) → konversi string password ke byte array
+                // sha.ComputeHash(...)           → hitung SHA-256 → hasilnya 32 byte (256 bit)
+
+                return BitConverter.ToString(bytes) // konversi byte[] ke format "AB-CD-EF-..."
+                                   .Replace("-", "") // hapus tanda hubung → "ABCDEF..."
+                                   .ToLower();       // huruf kecil → "abcdef..." (64 karakter hex)
+                // Contoh hasil: "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f"
             }
         }
     }
