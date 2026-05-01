@@ -16,7 +16,7 @@ namespace UTS_ISA.users
     //    - GetPendingMessages: ambil pesan offline saat user login
     //    - GetAllMessages    : ambil riwayat chat lengkap saat login
     //
-    //  LAPISAN ENKRIPSI KOLOM message_plain:
+    //  LAPISAN ENKRIPSI KOLOM message_backup:
     //    Kolom ini TIDAK menyimpan plaintext langsung.
     //    Sebelum disimpan → dienkripsi dengan _dbKey (AES-256, fixed server key).
     //    Tujuan: siapapun yang buka phpMyAdmin tidak bisa membaca isi pesan.
@@ -60,17 +60,17 @@ namespace UTS_ISA.users
                     System.Text.Encoding.UTF8.GetBytes("UTS_ISA_SECURE_DB_KEY_2024"));
         }
 
-        // ── Helper enkripsi/dekripsi kolom message_plain ──────────────────────
+        // ── Helper enkripsi/dekripsi kolom message_backup ──────────────────────
 
         /// <summary>
         /// Enkripsi plaintext dengan server DB key sebelum disimpan ke DB.
-        /// Dipanggil oleh SaveMessage sebelum INSERT ke kolom message_plain.
+        /// Dipanggil oleh SaveMessage sebelum INSERT ke kolom message_backup.
         /// </summary>
         private static string DbEncrypt(string plain)
             => CryptoHelper.AesEncrypt(plain, _dbKey, _dbIv); // enkripsi AES-256-CBC
 
         /// <summary>
-        /// Dekripsi data dari kolom message_plain di DB.
+        /// Dekripsi data dari kolom message_backup di DB.
         /// Jika gagal decrypt (misal data lama yang masih plaintext), kembalikan string kosong.
         /// </summary>
         private static string DbDecrypt(string cipher)
@@ -183,7 +183,7 @@ namespace UTS_ISA.users
         //    sender            : username pengirim
         //    receiver          : username penerima
         //    message_encrypted : ciphertext AES asli dari sender (audit trail)
-        //    message_plain     : plaintext yang sudah dienkripsi ulang dengan _dbKey
+        //    message_backup     : plaintext yang sudah dienkripsi ulang dengan _dbKey
         //    sent_at           : waktu pesan dikirim (NOW())
         //    delivered         : 0 (belum terkirim ke penerima)
         //
@@ -206,14 +206,14 @@ namespace UTS_ISA.users
 
                     // Query INSERT semua kolom sekaligus
                     var cmd = new MySqlCommand(
-                        "INSERT INTO messages (sender, receiver, message_encrypted, message_plain, sent_at, delivered)" +
+                        "INSERT INTO messages (sender, receiver, message_encrypted, message_backup, sent_at, delivered)" +
                         " VALUES (@s, @r, @enc, @plain, NOW(), 0)", conn);
 
                     cmd.Parameters.AddWithValue("@s",   sender);           // username pengirim
                     cmd.Parameters.AddWithValue("@r",   receiver);         // username penerima
                     cmd.Parameters.AddWithValue("@enc", encryptedMessage); // ciphertext asli (audit trail)
 
-                    // ENKRIPSI plaintext dengan DB key sebelum disimpan ke kolom message_plain
+                    // ENKRIPSI plaintext dengan DB key sebelum disimpan ke kolom message_backup
                     // → siapapun yang buka phpMyAdmin hanya melihat ciphertext, bukan isi pesan
                     cmd.Parameters.AddWithValue("@plain", DbEncrypt(plainMessage));
 
@@ -272,17 +272,17 @@ namespace UTS_ISA.users
                 {
                     conn.Open(); // buka koneksi ke MySQL
 
-                    // Ambil sender, message_plain, sent_at WHERE delivered=0 (belum terkirim)
+                    // Ambil sender, message_backup, sent_at WHERE delivered=0 (belum terkirim)
                     // ORDER BY sent_at ASC → urutkan dari yang paling lama (kronologis)
                     var cmd = new MySqlCommand(
-                        "SELECT sender, message_plain, sent_at FROM messages" +
+                        "SELECT sender, message_backup, sent_at FROM messages" +
                         " WHERE receiver=@r AND delivered=0 ORDER BY sent_at ASC", conn);
                     cmd.Parameters.AddWithValue("@r", receiver); // penerima = user yang baru login
 
                     var r = cmd.ExecuteReader(); // jalankan query SELECT
                     while (r.Read())
                     {
-                        // Cek apakah kolom message_plain NULL (untuk keamanan, hindari SqlNullValueException)
+                        // Cek apakah kolom message_backup NULL (untuk keamanan, hindari SqlNullValueException)
                         string raw   = r.IsDBNull(1) ? "" : r.GetString(1); // ambil ciphertext dari DB
 
                         // Dekripsi ciphertext dengan DB key → dapat plaintext
@@ -341,8 +341,8 @@ namespace UTS_ISA.users
                     conn.Open(); // buka koneksi ke MySQL
 
                     var cmd = new MySqlCommand(
-                        "SELECT sender, receiver, message_plain, sent_at FROM messages" +
-                        " WHERE message_plain IS NOT NULL AND message_plain <> ''" + // skip baris kosong
+                        "SELECT sender, receiver, message_backup, sent_at FROM messages" +
+                        " WHERE message_backup IS NOT NULL AND message_backup <> ''" + // skip baris kosong
                         "   AND (sender=@u OR (receiver=@u AND delivered=1))"       // filter: sent + received delivered
                         + " ORDER BY sent_at ASC", conn); // urutkan dari lama ke baru (kronologis)
 
@@ -351,8 +351,8 @@ namespace UTS_ISA.users
                     var r = cmd.ExecuteReader(); // jalankan query SELECT
                     while (r.Read())
                     {
-                        // Dekripsi message_plain dari DB key → dapat plaintext
-                        string plain = DbDecrypt(r.GetString(2)); // kolom index 2 = message_plain
+                        // Dekripsi message_backup dari DB key → dapat plaintext
+                        string plain = DbDecrypt(r.GetString(2)); // kolom index 2 = message_backup
 
                         // Hanya tambahkan jika dekripsi berhasil (bukan string kosong)
                         if (!string.IsNullOrEmpty(plain))

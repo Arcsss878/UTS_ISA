@@ -26,7 +26,7 @@ namespace UTS_ISA
     //  │    Hanya bisa dibuka dengan AES key milik sender (sudah hilang      │
     //  │    setelah sesi berakhir) → tidak bisa dibuka siapapun.             │
     //  │                                                                     │
-    //  │  Layer 3 — DB kolom message_plain (AES server DB key)  ← BARU      │
+    //  │  Layer 3 — DB kolom message_backup (AES server DB key)  ← BARU      │
     //  │    Plaintext ikut dienkripsi pakai fixed server key sebelum         │
     //  │    disimpan ke DB. Siapapun yang buka phpMyAdmin tidak akan         │
     //  │    bisa membaca isi pesan. Server decrypt dulu saat perlu           │
@@ -73,7 +73,7 @@ namespace UTS_ISA
             => CryptoHelper.AesEncrypt(plain, _dbKey, _dbIv);
 
         /// <summary>
-        /// Dekripsi data dari kolom message_plain di DB.
+        /// Dekripsi data dari kolom message_backup di DB.
         /// Jika gagal (misal data lama yang belum terenkripsi), kembalikan string kosong.
         /// </summary>
         private static string DbDecrypt(string cipher)
@@ -149,8 +149,8 @@ namespace UTS_ISA
                 {
                     c.Open();
                     var cmd = new MySqlCommand(
-                        "SELECT sender, receiver, message_plain, sent_at FROM messages" +
-                        " WHERE message_plain IS NOT NULL AND message_plain <> ''" +
+                        "SELECT sender, receiver, message_backup, sent_at FROM messages" +
+                        " WHERE message_backup IS NOT NULL AND message_backup <> ''" +
                         "   AND (sender=@u OR (receiver=@u AND delivered=1))" +
                         " ORDER BY sent_at ASC", c);
                     cmd.Parameters.AddWithValue("@u", username);
@@ -200,7 +200,7 @@ namespace UTS_ISA
                     c.Open();
                     var cmd = new MySqlCommand(
                         "INSERT INTO messages" +
-                        "(sender,receiver,message_encrypted,message_plain,sent_at,delivered)" +
+                        "(sender,receiver,message_encrypted,message_backup,sent_at,delivered)" +
                         " VALUES(@s,@r,@enc,@plain,NOW(),0)", c);
                     cmd.Parameters.AddWithValue("@s",     sender);
                     cmd.Parameters.AddWithValue("@r",     receiver);
@@ -255,7 +255,7 @@ namespace UTS_ISA
                 {
                     c.Open();
                     var cmd = new MySqlCommand(
-                        "SELECT sender, message_plain, sent_at FROM messages" +
+                        "SELECT sender, message_backup, sent_at FROM messages" +
                         " WHERE receiver=@r AND delivered=0 ORDER BY sent_at", c);
                     cmd.Parameters.AddWithValue("@r", receiver);
                     var r = cmd.ExecuteReader();
@@ -638,7 +638,7 @@ namespace UTS_ISA
 
             // ── Simpan ke DB ──────────────────────────────────────────────────
             // encMsg  → kolom message_encrypted (audit trail)
-            // plain   → dienkripsi DB key → kolom message_plain
+            // plain   → dienkripsi DB key → kolom message_backup
             // delivered=0 → belum terkirim ke penerima
             long msgId = ServerDb.SaveMessage(from, to, encMsg, plain); // dapat ID row baru
 
