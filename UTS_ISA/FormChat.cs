@@ -53,6 +53,11 @@ namespace UTS_ISA
         private Dictionary<string, List<string>> chatHistories =
             new Dictionary<string, List<string>>();
 
+        // ── Daftar user yang punya pesan BARU belum dibaca ───────────────────────
+        // Ditambah saat MSG masuk dan bukan dari currentChatTarget
+        // Dihapus saat user membuka chat dengan orang tersebut
+        private HashSet<string> unreadUsers = new HashSet<string>();
+
         // ── Status online/offline per user ────────────────────────────────────────
         // Di-update setiap kali server broadcast ALL_USERS
         private Dictionary<string, bool> userStatus = new Dictionary<string, bool>();
@@ -348,8 +353,9 @@ namespace UTS_ISA
             }
             else
             {
-                // Tidak sedang membuka chat dengan pengirim → tampilkan notif "(!)"
-                RefreshUserList();
+                // Tidak sedang membuka chat dengan pengirim → tandai sebagai unread
+                unreadUsers.Add(from); // tambah ke daftar belum dibaca
+                RefreshUserList();     // refresh agar (!) muncul di user list
             }
         }
 
@@ -416,10 +422,10 @@ namespace UTS_ISA
                 {
                     string status  = kv.Value ? "[Online]" : "[Offline]";
 
-                    // Cek apakah ada pesan belum dibaca dari user ini
-                    bool hasUnread = chatHistories.ContainsKey(kv.Key) &&
-                                     kv.Key != currentChatTarget &&
-                                     chatHistories[kv.Key].Count > 0;
+                    // Cek apakah ada pesan BARU belum dibaca dari user ini
+                    // Hanya tampil (!) jika user ada di unreadUsers (pesan baru masuk)
+                    // Bukan semua user yang punya history
+                    bool hasUnread = unreadUsers.Contains(kv.Key);
 
                     lstUser.Items.Add(status + " " + kv.Key + (hasUnread ? " (!)" : ""));
                 }
@@ -481,8 +487,9 @@ namespace UTS_ISA
                 lstRiwayat.TopIndex = lstRiwayat.Items.Count - 1;
             }
 
+            unreadUsers.Remove(currentChatTarget); // hapus tanda (!) setelah dibuka
             UpdateChatLabel();
-            RefreshUserList(); // hapus tanda "(!) " setelah dibuka
+            RefreshUserList();
             txtChat.Focus();
         }
 
