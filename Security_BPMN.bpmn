@@ -47,7 +47,7 @@
         <flowNodeRef>Task_C_ReceiveNewToken</flowNodeRef>
         <flowNodeRef>End_C_LoginFail</flowNodeRef>
       </lane>
-      <lane id="Lane_C_Chat" name="4. Enkripsi Pesan (AES-256)">
+      <lane id="Lane_C_Chat" name="4. Enkripsi Pesan (AES-256 + per-message IV)">
         <flowNodeRef>Task_C_EncryptMsg</flowNodeRef>
         <flowNodeRef>Task_C_SendChat</flowNodeRef>
         <flowNodeRef>Task_C_ReceiveMsg</flowNodeRef>
@@ -100,7 +100,7 @@
     <sequenceFlow id="SF_C17" sourceRef="Task_C_ReceiveNewToken" targetRef="Task_C_EncryptMsg" />
     <endEvent id="End_C_LoginFail" name="Login Gagal" />
 
-    <task id="Task_C_EncryptMsg" name="AesEncrypt(pesan,&#10;aesKey, aesIV)" />
+    <task id="Task_C_EncryptMsg" name="Generate IV Random baru&#10;AesEncryptMsg(pesan, aesKey)&#10;→ Base64(IV + ciphertext)" />
     <sequenceFlow id="SF_C18" sourceRef="Task_C_EncryptMsg" targetRef="Task_C_SendChat" />
     <task id="Task_C_SendChat" name="Kirim CHAT&#10;|from|to|cipher|token|" />
     <sequenceFlow id="SF_C19" sourceRef="Task_C_SendChat" targetRef="Task_C_ReceiveMsg" />

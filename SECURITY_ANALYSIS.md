@@ -72,7 +72,7 @@ Aplikasi ini mengimplementasikan **tiga lapisan enkripsi** yang bekerja secara b
 |---|---|---|
 | Password Storage | SHA-256 | Hash password sebelum disimpan ke DB |
 | Key Exchange | RSA-2048 + OAEP | Tukar AES session key secara aman |
-| Transit Encryption | AES-256-CBC | Enkripsi pesan di jaringan |
+| Transit Encryption | AES-256-CBC + **per-message random IV** | Enkripsi pesan di jaringan, IV baru tiap pesan |
 | Database Encryption | AES-256-CBC | Enkripsi plaintext di kolom message_backup |
 | Session Management | GUID Token + Expiry | Validasi identitas per sesi |
 
@@ -243,6 +243,7 @@ Client                          Server
 **Analisis Keamanan:**
 - AES key berbeda setiap sesi → compromise satu sesi tidak expose sesi lain (**Perfect Forward Secrecy sebagian**)
 - RSA OAEP padding mencegah chosen-ciphertext attack
+- **Per-message random IV** → pesan yang sama dikirim berkali-kali menghasilkan ciphertext yang selalu berbeda → tahan terhadap Pattern Recognition Attack dan Known-Plaintext Attack (diverifikasi via Wireshark)
 - Kelemahan: tidak ada verifikasi identitas server (certificate) → rentan MITM jika attacker bisa intersep koneksi TCP awal
 
 ---
@@ -306,18 +307,21 @@ Logout : invalidate token → is_valid=0 di DB
 
 Setiap sistem keamanan memiliki kelemahan. Berikut kelemahan yang teridentifikasi beserta rekomendasi perbaikan:
 
-### 1. Fixed IV pada DB Key
+### 1. Fixed IV pada DB Key *(Transit sudah diperbaiki)*
 
 ```
-Kondisi saat ini:
-  _dbIv = { 0x55, 0x54, 0x53, ... } // hardcoded, tidak berubah
+Transit (SUDAH DIPERBAIKI ✅):
+  AesEncryptMsg() → generate IV baru random setiap pesan
+  Format: Base64(IV[16 byte] + ciphertext)
+  Diverifikasi via Wireshark: 3x kirim "TEST" → 3 ciphertext berbeda
 
-Risiko:
-  IV yang sama + key yang sama → pola yang sama di ciphertext
-  Jika dua pesan memiliki plaintext yang sama, ciphertext-nya sama
+Database message_backup (masih fixed IV ⚠️):
+  _dbIv = { 0x55, 0x54, 0x53, ... } // hardcoded, tidak berubah
+  Risiko: plaintext yang sama → ciphertext message_backup sama
+  Konteks: kolom ini hanya dibaca server, tidak terekspos ke jaringan
 
 Rekomendasi:
-  Generate IV random per pesan, simpan bersama ciphertext di DB
+  Generate IV random per record, simpan di kolom terpisah di DB
 ```
 
 ### 2. SHA-256 tanpa Salt untuk Password
@@ -435,7 +439,10 @@ Rekomendasi pengembangan ke depan:
 - Implementasi TLS/SSL untuk transport layer
 - Ganti SHA-256 dengan bcrypt untuk password hashing
 - Tambah HMAC untuk verifikasi integritas pesan
-- Implementasi random IV per pesan untuk DB encryption
+- Implementasi random IV per record untuk DB encryption (message_backup)
+
+**Update v2 (sudah diimplementasi):**
+- ✅ Per-message random IV untuk transit enkripsi → mencegah Pattern Recognition Attack dan Known-Plaintext Attack
 
 ---
 

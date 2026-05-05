@@ -38,9 +38,9 @@ flowchart TD
             C4 -->|Tidak| C3
         end
 
-        subgraph AES["4. Enkripsi Pesan (AES-256)"]
+        subgraph AES["4. Enkripsi Pesan (AES-256 + per-message IV)"]
             D1["Tulis Pesan"]
-            D2["AesEncrypt(pesan, aesKey, aesIV)"]
+            D2["Generate IV Random baru\nAesEncryptMsg(pesan, aesKey)\n→ Base64(IV + ciphertext)"]
             D3["Kirim CHAT\n|from|to|AES(pesan)|token|"]
             D4["Terima MSG\n|from|AES(pesan)|"]
             D5["AesDecrypt(cipher, aesKey, aesIV)"]
@@ -127,7 +127,7 @@ flowchart TD
 | **1. Keamanan Password (SHA-256)** | Password di-hash SHA-256 di sisi client sebelum dikirim. Server tidak pernah menerima password asli. |
 | **2. Key Exchange (RSA-2048)** | Client generate AES key secara random, lalu enkripsi pakai RSA Public Key server (OAEP). Hanya server yang bisa buka. |
 | **3. Session Token** | Setiap aksi chat wajib sertakan token. Token expire 1 jam, auto-refresh 2 menit sebelum expired. |
-| **4. Enkripsi Pesan (AES-256)** | Semua pesan dienkripsi AES-256-CBC sebelum dikirim via jaringan. |
+| **4. Enkripsi Pesan (AES-256)** | Setiap pesan dienkripsi AES-256-CBC dengan **IV random baru per pesan** (`AesEncryptMsg`). Format: `Base64(IV[16 byte] + ciphertext)`. Pesan yang sama dikirim berkali-kali → ciphertext selalu berbeda → tahan Pattern Recognition Attack. |
 
 ### Server Pool
 
