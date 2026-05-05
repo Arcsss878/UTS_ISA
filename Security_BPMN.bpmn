@@ -1,0 +1,579 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             targetNamespace="http://securechat.security.bpmn">
+
+  <collaboration id="Collab_Security">
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  POOL: CLIENT                                                   -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <participant id="Pool_Client" name="Client (User)" processRef="Proc_Client" />
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  POOL: SERVER                                                   -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <participant id="Pool_Server" name="Server &#38; Database" processRef="Proc_Server" />
+
+    <!-- Message Flows -->
+    <messageFlow id="MF_PubKey"       name="PUBKEY|RSA public key"              sourceRef="Task_S_SendPubKey"    targetRef="Task_C_ReceivePubKey" />
+    <messageFlow id="MF_KeyExchange"  name="KEY_EXCHANGE|encKey|encIV"          sourceRef="Task_C_SendKeyExchange" targetRef="Task_S_ReceiveKeyExchange" />
+    <messageFlow id="MF_LoginSuccess" name="LOGIN_SUCCESS|role|token|expiry"    sourceRef="Task_S_SendLoginOK"   targetRef="Task_C_ReceiveLoginOK" />
+    <messageFlow id="MF_LoginFail"    name="LOGIN_FAIL|alasan"                  sourceRef="Task_S_SendLoginFail" targetRef="Task_C_ReceiveLoginFail" />
+    <messageFlow id="MF_ChatMsg"      name="CHAT|from|to|AES(pesan)|token"      sourceRef="Task_C_SendChat"      targetRef="Task_S_ReceiveChat" />
+    <messageFlow id="MF_MsgDelivery"  name="MSG|from|AES(pesan)"                sourceRef="Task_S_ForwardMsg"    targetRef="Task_C_ReceiveMsg" />
+    <messageFlow id="MF_History"      name="HISTORY|sender|receiver|AES|time"   sourceRef="Task_S_SendHistory"   targetRef="Task_C_ReceiveHistory" />
+    <messageFlow id="MF_TokenRefresh" name="TOKEN_REFRESHED|newToken|expiry"    sourceRef="Task_S_SendNewToken"  targetRef="Task_C_ReceiveNewToken" />
+  </collaboration>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!--  PROCESS: CLIENT                                                    -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <process id="Proc_Client" isExecutable="false">
+
+    <!-- Lane: Password Security -->
+    <laneSet id="LaneSet_Client">
+      <lane id="Lane_C_Password" name="1. Keamanan Password (SHA-256)">
+        <flowNodeRef>Start_C</flowNodeRef>
+        <flowNodeRef>Task_C_InputCredential</flowNodeRef>
+        <flowNodeRef>Task_C_HashPassword</flowNodeRef>
+        <flowNodeRef>GW_C_RegisterOrLogin</flowNodeRef>
+        <flowNodeRef>Task_C_SendRegister</flowNodeRef>
+        <flowNodeRef>Task_C_SendLogin</flowNodeRef>
+      </lane>
+      <lane id="Lane_C_KeyExchange" name="2. Key Exchange (RSA-2048)">
+        <flowNodeRef>Task_C_ReceivePubKey</flowNodeRef>
+        <flowNodeRef>Task_C_GenerateAES</flowNodeRef>
+        <flowNodeRef>Task_C_EncryptAESWithRSA</flowNodeRef>
+        <flowNodeRef>Task_C_SendKeyExchange</flowNodeRef>
+      </lane>
+      <lane id="Lane_C_Session" name="3. Session Token">
+        <flowNodeRef>Task_C_ReceiveLoginOK</flowNodeRef>
+        <flowNodeRef>Task_C_ReceiveLoginFail</flowNodeRef>
+        <flowNodeRef>Task_C_ReceiveHistory</flowNodeRef>
+        <flowNodeRef>Task_C_StoreToken</flowNodeRef>
+        <flowNodeRef>Task_C_TokenCountdown</flowNodeRef>
+        <flowNodeRef>GW_C_TokenExpiring</flowNodeRef>
+        <flowNodeRef>Task_C_RequestTokenRefresh</flowNodeRef>
+        <flowNodeRef>Task_C_ReceiveNewToken</flowNodeRef>
+        <flowNodeRef>End_C_LoginFail</flowNodeRef>
+      </lane>
+      <lane id="Lane_C_Chat" name="4. Enkripsi Pesan (AES-256)">
+        <flowNodeRef>Task_C_EncryptMsg</flowNodeRef>
+        <flowNodeRef>Task_C_SendChat</flowNodeRef>
+        <flowNodeRef>Task_C_ReceiveMsg</flowNodeRef>
+        <flowNodeRef>Task_C_DecryptMsg</flowNodeRef>
+        <flowNodeRef>Task_C_DisplayMsg</flowNodeRef>
+        <flowNodeRef>End_C</flowNodeRef>
+      </lane>
+    </laneSet>
+
+    <!-- START -->
+    <startEvent id="Start_C" name="Buka Aplikasi" />
+    <sequenceFlow id="SF_C1" sourceRef="Start_C" targetRef="Task_C_ReceivePubKey" />
+
+    <!-- LANE 2: Key Exchange -->
+    <task id="Task_C_ReceivePubKey" name="Terima RSA&#10;Public Key dari Server" />
+    <sequenceFlow id="SF_C2" sourceRef="Task_C_ReceivePubKey" targetRef="Task_C_GenerateAES" />
+
+    <task id="Task_C_GenerateAES" name="Generate AES Key (256-bit)&#10;dan AES IV (128-bit) RANDOM" />
+    <sequenceFlow id="SF_C3" sourceRef="Task_C_GenerateAES" targetRef="Task_C_EncryptAESWithRSA" />
+
+    <task id="Task_C_EncryptAESWithRSA" name="Enkripsi AES Key+IV&#10;pakai RSA Public Key&#10;(OAEP Padding)" />
+    <sequenceFlow id="SF_C4" sourceRef="Task_C_EncryptAESWithRSA" targetRef="Task_C_SendKeyExchange" />
+
+    <task id="Task_C_SendKeyExchange" name="Kirim KEY_EXCHANGE&#10;ke Server" />
+    <sequenceFlow id="SF_C5" sourceRef="Task_C_SendKeyExchange" targetRef="Task_C_InputCredential" />
+
+    <!-- LANE 1: Password -->
+    <task id="Task_C_InputCredential" name="User Input&#10;Username + Password" />
+    <sequenceFlow id="SF_C6" sourceRef="Task_C_InputCredential" targetRef="Task_C_HashPassword" />
+
+    <task id="Task_C_HashPassword" name="Hash Password&#10;dengan SHA-256&#10;(di client, sebelum kirim)" />
+    <sequenceFlow id="SF_C7" sourceRef="Task_C_HashPassword" targetRef="GW_C_RegisterOrLogin" />
+
+    <exclusiveGateway id="GW_C_RegisterOrLogin" name="Register&#10;atau Login?" />
+    <sequenceFlow id="SF_C8a" name="Register" sourceRef="GW_C_RegisterOrLogin" targetRef="Task_C_SendRegister" />
+    <sequenceFlow id="SF_C8b" name="Login" sourceRef="GW_C_RegisterOrLogin" targetRef="Task_C_SendLogin" />
+
+    <task id="Task_C_SendRegister" name="Kirim REGISTER|username&#10;|sha256_hash ke Server" />
+    <sequenceFlow id="SF_C9" sourceRef="Task_C_SendRegister" targetRef="Task_C_ReceiveLoginOK" />
+
+    <task id="Task_C_SendLogin" name="Kirim LOGIN|username&#10;|sha256_hash ke Server" />
+    <sequenceFlow id="SF_C10" sourceRef="Task_C_SendLogin" targetRef="Task_C_ReceiveLoginOK" />
+
+    <!-- LANE 3: Session -->
+    <task id="Task_C_ReceiveLoginOK" name="Terima LOGIN_SUCCESS&#10;|role|token|expiry" />
+    <task id="Task_C_ReceiveLoginFail" name="Terima LOGIN_FAIL&#10;Tampilkan Pesan Error" />
+    <sequenceFlow id="SF_C11a" sourceRef="Task_C_ReceiveLoginOK" targetRef="Task_C_StoreToken" />
+    <sequenceFlow id="SF_C11b" sourceRef="Task_C_ReceiveLoginFail" targetRef="End_C_LoginFail" />
+
+    <task id="Task_C_ReceiveHistory" name="Terima HISTORY&#10;Riwayat Chat dari DB&#10;Dekripsi AES → Tampilkan" />
+    <sequenceFlow id="SF_C12" sourceRef="Task_C_StoreToken" targetRef="Task_C_ReceiveHistory" />
+
+    <task id="Task_C_StoreToken" name="Simpan Session Token&#10;di Memori Client" />
+    <sequenceFlow id="SF_C13" sourceRef="Task_C_ReceiveHistory" targetRef="Task_C_TokenCountdown" />
+
+    <task id="Task_C_TokenCountdown" name="Timer Countdown Token&#10;Tampilkan Sisa Waktu&#10;(Tick setiap 1 detik)" />
+    <sequenceFlow id="SF_C14" sourceRef="Task_C_TokenCountdown" targetRef="GW_C_TokenExpiring" />
+
+    <exclusiveGateway id="GW_C_TokenExpiring" name="Sisa Token&#10;&lt; 2 menit?" />
+    <sequenceFlow id="SF_C15a" name="Ya, hampir expired" sourceRef="GW_C_TokenExpiring" targetRef="Task_C_RequestTokenRefresh" />
+    <sequenceFlow id="SF_C15b" name="Tidak, masih aman" sourceRef="GW_C_TokenExpiring" targetRef="Task_C_EncryptMsg" />
+
+    <task id="Task_C_RequestTokenRefresh" name="Kirim TOKEN_REFRESH&#10;|username|old_token" />
+    <sequenceFlow id="SF_C16" sourceRef="Task_C_RequestTokenRefresh" targetRef="Task_C_ReceiveNewToken" />
+
+    <task id="Task_C_ReceiveNewToken" name="Terima TOKEN_REFRESHED&#10;Update Token + Expiry&#10;di Memori" />
+    <sequenceFlow id="SF_C17" sourceRef="Task_C_ReceiveNewToken" targetRef="Task_C_EncryptMsg" />
+
+    <endEvent id="End_C_LoginFail" name="Login Gagal" />
+
+    <!-- LANE 4: Chat -->
+    <task id="Task_C_EncryptMsg" name="Enkripsi Pesan&#10;AesEncrypt(msg, aesKey, aesIV)&#10;→ Base64 ciphertext" />
+    <sequenceFlow id="SF_C18" sourceRef="Task_C_EncryptMsg" targetRef="Task_C_SendChat" />
+
+    <task id="Task_C_SendChat" name="Kirim CHAT|from|to&#10;|AES(pesan)|token" />
+    <sequenceFlow id="SF_C19" sourceRef="Task_C_SendChat" targetRef="Task_C_ReceiveMsg" />
+
+    <task id="Task_C_ReceiveMsg" name="Terima MSG|from&#10;|AES(pesan) dari Server" />
+    <sequenceFlow id="SF_C20" sourceRef="Task_C_ReceiveMsg" targetRef="Task_C_DecryptMsg" />
+
+    <task id="Task_C_DecryptMsg" name="Dekripsi Pesan&#10;AesDecrypt(cipher, aesKey, aesIV)&#10;→ Plaintext" />
+    <sequenceFlow id="SF_C21" sourceRef="Task_C_DecryptMsg" targetRef="Task_C_DisplayMsg" />
+
+    <task id="Task_C_DisplayMsg" name="Tampilkan Pesan&#10;di Chat Window" />
+    <sequenceFlow id="SF_C22" sourceRef="Task_C_DisplayMsg" targetRef="End_C" />
+
+    <endEvent id="End_C" name="Selesai" />
+  </process>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!--  PROCESS: SERVER                                                    -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <process id="Proc_Server" isExecutable="false">
+
+    <laneSet id="LaneSet_Server">
+      <lane id="Lane_S_RSA" name="RSA Key Exchange">
+        <flowNodeRef>Start_S</flowNodeRef>
+        <flowNodeRef>Task_S_SendPubKey</flowNodeRef>
+        <flowNodeRef>Task_S_ReceiveKeyExchange</flowNodeRef>
+        <flowNodeRef>Task_S_DecryptAESWithRSA</flowNodeRef>
+      </lane>
+      <lane id="Lane_S_Auth" name="Autentikasi (SHA-256 + Session Token)">
+        <flowNodeRef>Task_S_ReceiveLoginReq</flowNodeRef>
+        <flowNodeRef>Task_S_CheckDB</flowNodeRef>
+        <flowNodeRef>GW_S_ValidCred</flowNodeRef>
+        <flowNodeRef>Task_S_GenerateToken</flowNodeRef>
+        <flowNodeRef>Task_S_SendLoginOK</flowNodeRef>
+        <flowNodeRef>Task_S_SendLoginFail</flowNodeRef>
+        <flowNodeRef>Task_S_LogSession</flowNodeRef>
+        <flowNodeRef>Task_S_SendHistory</flowNodeRef>
+        <flowNodeRef>Task_S_SendPendingMsg</flowNodeRef>
+        <flowNodeRef>Task_S_SendNewToken</flowNodeRef>
+      </lane>
+      <lane id="Lane_S_Chat" name="Proses Pesan (Triple Cipher)">
+        <flowNodeRef>Task_S_ReceiveChat</flowNodeRef>
+        <flowNodeRef>Task_S_ValidateToken</flowNodeRef>
+        <flowNodeRef>GW_S_TokenValid</flowNodeRef>
+        <flowNodeRef>Task_S_DecryptFromSender</flowNodeRef>
+        <flowNodeRef>Task_S_SaveDB</flowNodeRef>
+        <flowNodeRef>GW_S_RecipientOnline</flowNodeRef>
+        <flowNodeRef>Task_S_ForwardMsg</flowNodeRef>
+        <flowNodeRef>Task_S_MarkDelivered</flowNodeRef>
+        <flowNodeRef>Task_S_PendingInDB</flowNodeRef>
+        <flowNodeRef>Task_S_SendError</flowNodeRef>
+        <flowNodeRef>End_S</flowNodeRef>
+        <flowNodeRef>End_S_Error</flowNodeRef>
+      </lane>
+    </laneSet>
+
+    <!-- START -->
+    <startEvent id="Start_S" name="Terima Koneksi&#10;TCP Client Baru" />
+    <sequenceFlow id="SF_S1" sourceRef="Start_S" targetRef="Task_S_SendPubKey" />
+
+    <!-- LANE 1: RSA -->
+    <task id="Task_S_SendPubKey" name="Kirim RSA Public Key&#10;(2048-bit, format XML Base64)" />
+    <sequenceFlow id="SF_S2" sourceRef="Task_S_SendPubKey" targetRef="Task_S_ReceiveKeyExchange" />
+
+    <task id="Task_S_ReceiveKeyExchange" name="Terima KEY_EXCHANGE&#10;|encAesKey|encAesIV" />
+    <sequenceFlow id="SF_S3" sourceRef="Task_S_ReceiveKeyExchange" targetRef="Task_S_DecryptAESWithRSA" />
+
+    <task id="Task_S_DecryptAESWithRSA" name="Dekripsi AES Key+IV&#10;pakai RSA Private Key&#10;→ Dapat AES Session Key" />
+    <sequenceFlow id="SF_S4" sourceRef="Task_S_DecryptAESWithRSA" targetRef="Task_S_ReceiveLoginReq" />
+
+    <!-- LANE 2: Auth -->
+    <task id="Task_S_ReceiveLoginReq" name="Terima LOGIN|username&#10;|sha256_password_hash" />
+    <sequenceFlow id="SF_S5" sourceRef="Task_S_ReceiveLoginReq" targetRef="Task_S_CheckDB" />
+
+    <task id="Task_S_CheckDB" name="Cek DB: SELECT role FROM users&#10;WHERE username=? AND password_hash=?&#10;(bandingkan hash, bukan plaintext)" />
+    <sequenceFlow id="SF_S6" sourceRef="Task_S_CheckDB" targetRef="GW_S_ValidCred" />
+
+    <exclusiveGateway id="GW_S_ValidCred" name="Kredensial&#10;Valid?" />
+    <sequenceFlow id="SF_S7a" name="Valid" sourceRef="GW_S_ValidCred" targetRef="Task_S_GenerateToken" />
+    <sequenceFlow id="SF_S7b" name="Tidak Valid" sourceRef="GW_S_ValidCred" targetRef="Task_S_SendLoginFail" />
+
+    <task id="Task_S_SendLoginFail" name="Kirim LOGIN_FAIL&#10;|Username atau password salah" />
+    <sequenceFlow id="SF_S8" sourceRef="Task_S_SendLoginFail" targetRef="End_S_Error" />
+
+    <task id="Task_S_GenerateToken" name="Generate Session Token&#10;GUID 32 karakter (128-bit entropy)&#10;Expiry = Sekarang + 1 Jam" />
+    <sequenceFlow id="SF_S9" sourceRef="Task_S_GenerateToken" targetRef="Task_S_SendLoginOK" />
+
+    <task id="Task_S_SendLoginOK" name="Kirim LOGIN_SUCCESS&#10;|role|token|expiry_time" />
+    <sequenceFlow id="SF_S10" sourceRef="Task_S_SendLoginOK" targetRef="Task_S_LogSession" />
+
+    <task id="Task_S_LogSession" name="Simpan Token ke DB&#10;Tabel sessions&#10;(Audit Trail is_valid=1)" />
+    <sequenceFlow id="SF_S11" sourceRef="Task_S_LogSession" targetRef="Task_S_SendHistory" />
+
+    <task id="Task_S_SendHistory" name="Kirim HISTORY&#10;Ambil dari DB → DbDecrypt&#10;→ Re-enkripsi AES → Kirim" />
+    <sequenceFlow id="SF_S12" sourceRef="Task_S_SendHistory" targetRef="Task_S_SendPendingMsg" />
+
+    <task id="Task_S_SendPendingMsg" name="Kirim Pesan Pending&#10;(delivered=0) → DbDecrypt&#10;→ Re-enkripsi AES → Kirim" />
+    <sequenceFlow id="SF_S13" sourceRef="Task_S_SendPendingMsg" targetRef="Task_S_ReceiveChat" />
+
+    <task id="Task_S_SendNewToken" name="Generate Token Baru&#10;Kirim TOKEN_REFRESHED&#10;|newToken|newExpiry" />
+    <sequenceFlow id="SF_S_TR" sourceRef="Task_S_SendNewToken" targetRef="Task_S_ReceiveChat" />
+
+    <!-- LANE 3: Chat (Triple Cipher) -->
+    <task id="Task_S_ReceiveChat" name="Terima CHAT|from|to&#10;|AES(pesan)|token" />
+    <sequenceFlow id="SF_S14" sourceRef="Task_S_ReceiveChat" targetRef="Task_S_ValidateToken" />
+
+    <task id="Task_S_ValidateToken" name="Validasi Session Token:&#10;- Token cocok?&#10;- Token belum expired?" />
+    <sequenceFlow id="SF_S15" sourceRef="Task_S_ValidateToken" targetRef="GW_S_TokenValid" />
+
+    <exclusiveGateway id="GW_S_TokenValid" name="Token&#10;Valid?" />
+    <sequenceFlow id="SF_S16a" name="Valid" sourceRef="GW_S_TokenValid" targetRef="Task_S_DecryptFromSender" />
+    <sequenceFlow id="SF_S16b" name="Tidak Valid / Expired" sourceRef="GW_S_TokenValid" targetRef="Task_S_SendError" />
+
+    <task id="Task_S_SendError" name="Kirim ERROR&#10;|Session tidak valid&#10;Paksa Logout Client" />
+    <sequenceFlow id="SF_S17" sourceRef="Task_S_SendError" targetRef="End_S_Error" />
+
+    <task id="Task_S_DecryptFromSender" name="[LAYER 1] Dekripsi Pesan&#10;AesDecrypt(cipher, aesKey_sender)&#10;→ Plaintext" />
+    <sequenceFlow id="SF_S18" sourceRef="Task_S_DecryptFromSender" targetRef="Task_S_SaveDB" />
+
+    <task id="Task_S_SaveDB" name="[LAYER 2+3] Simpan ke DB&#10;message_encrypted = ciphertext asli&#10;message_backup = DbEncrypt(plaintext)&#10;delivered = 0" />
+    <sequenceFlow id="SF_S19" sourceRef="Task_S_SaveDB" targetRef="GW_S_RecipientOnline" />
+
+    <exclusiveGateway id="GW_S_RecipientOnline" name="Recipient&#10;Online?" />
+    <sequenceFlow id="SF_S20a" name="Online" sourceRef="GW_S_RecipientOnline" targetRef="Task_S_ForwardMsg" />
+    <sequenceFlow id="SF_S20b" name="Offline" sourceRef="GW_S_RecipientOnline" targetRef="Task_S_PendingInDB" />
+
+    <task id="Task_S_ForwardMsg" name="Re-enkripsi Pesan&#10;AesEncrypt(plain, aesKey_recipient)&#10;Kirim MSG|from|AES(pesan)" />
+    <sequenceFlow id="SF_S21" sourceRef="Task_S_ForwardMsg" targetRef="Task_S_MarkDelivered" />
+
+    <task id="Task_S_MarkDelivered" name="Update DB&#10;SET delivered=1&#10;(Analogi: ✓✓ WhatsApp)" />
+    <sequenceFlow id="SF_S22" sourceRef="Task_S_MarkDelivered" targetRef="End_S" />
+
+    <task id="Task_S_PendingInDB" name="Pesan Tetap di DB&#10;delivered=0&#10;Kirim saat Recipient Login" />
+    <sequenceFlow id="SF_S23" sourceRef="Task_S_PendingInDB" targetRef="End_S" />
+
+    <endEvent id="End_S" name="Selesai" />
+    <endEvent id="End_S_Error" name="Koneksi Ditolak" />
+  </process>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!--  DIAGRAM INTERCHANGE (posisi elemen di canvas)                     -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <bpmndi:BPMNDiagram id="Diagram_Security">
+    <bpmndi:BPMNPlane id="Plane_Security" bpmnElement="Collab_Security">
+
+      <!-- ─── POOL CLIENT ─── -->
+      <bpmndi:BPMNShape id="Shape_Pool_Client" bpmnElement="Pool_Client" isHorizontal="true">
+        <dc:Bounds x="120" y="80" width="1600" height="680" />
+      </bpmndi:BPMNShape>
+
+      <!-- Lane 1: Password -->
+      <bpmndi:BPMNShape id="Shape_Lane_C_Password" bpmnElement="Lane_C_Password" isHorizontal="true">
+        <dc:Bounds x="150" y="80" width="1570" height="160" />
+      </bpmndi:BPMNShape>
+
+      <!-- Lane 2: Key Exchange -->
+      <bpmndi:BPMNShape id="Shape_Lane_C_KeyExchange" bpmnElement="Lane_C_KeyExchange" isHorizontal="true">
+        <dc:Bounds x="150" y="240" width="1570" height="160" />
+      </bpmndi:BPMNShape>
+
+      <!-- Lane 3: Session -->
+      <bpmndi:BPMNShape id="Shape_Lane_C_Session" bpmnElement="Lane_C_Session" isHorizontal="true">
+        <dc:Bounds x="150" y="400" width="1570" height="180" />
+      </bpmndi:BPMNShape>
+
+      <!-- Lane 4: Chat -->
+      <bpmndi:BPMNShape id="Shape_Lane_C_Chat" bpmnElement="Lane_C_Chat" isHorizontal="true">
+        <dc:Bounds x="150" y="580" width="1570" height="180" />
+      </bpmndi:BPMNShape>
+
+      <!-- Client Nodes - Lane 1 (Password) -->
+      <bpmndi:BPMNShape id="Shape_Start_C" bpmnElement="Start_C">
+        <dc:Bounds x="202" y="142" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_InputCredential" bpmnElement="Task_C_InputCredential">
+        <dc:Bounds x="480" y="120" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_HashPassword" bpmnElement="Task_C_HashPassword">
+        <dc:Bounds x="660" y="120" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_GW_C_RegisterOrLogin" bpmnElement="GW_C_RegisterOrLogin" isMarkerVisible="true">
+        <dc:Bounds x="840" y="135" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_SendRegister" bpmnElement="Task_C_SendRegister">
+        <dc:Bounds x="940" y="100" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_SendLogin" bpmnElement="Task_C_SendLogin">
+        <dc:Bounds x="940" y="160" width="140" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Client Nodes - Lane 2 (Key Exchange) -->
+      <bpmndi:BPMNShape id="Shape_Task_C_ReceivePubKey" bpmnElement="Task_C_ReceivePubKey">
+        <dc:Bounds x="202" y="260" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_GenerateAES" bpmnElement="Task_C_GenerateAES">
+        <dc:Bounds x="390" y="260" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_EncryptAESWithRSA" bpmnElement="Task_C_EncryptAESWithRSA">
+        <dc:Bounds x="580" y="260" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_SendKeyExchange" bpmnElement="Task_C_SendKeyExchange">
+        <dc:Bounds x="770" y="260" width="140" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Client Nodes - Lane 3 (Session) -->
+      <bpmndi:BPMNShape id="Shape_Task_C_ReceiveLoginOK" bpmnElement="Task_C_ReceiveLoginOK">
+        <dc:Bounds x="202" y="420" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_ReceiveLoginFail" bpmnElement="Task_C_ReceiveLoginFail">
+        <dc:Bounds x="202" y="510" width="140" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_StoreToken" bpmnElement="Task_C_StoreToken">
+        <dc:Bounds x="390" y="420" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_ReceiveHistory" bpmnElement="Task_C_ReceiveHistory">
+        <dc:Bounds x="580" y="420" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_TokenCountdown" bpmnElement="Task_C_TokenCountdown">
+        <dc:Bounds x="770" y="420" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_GW_C_TokenExpiring" bpmnElement="GW_C_TokenExpiring" isMarkerVisible="true">
+        <dc:Bounds x="960" y="435" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_RequestTokenRefresh" bpmnElement="Task_C_RequestTokenRefresh">
+        <dc:Bounds x="1060" y="420" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_ReceiveNewToken" bpmnElement="Task_C_ReceiveNewToken">
+        <dc:Bounds x="1250" y="420" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_C_LoginFail" bpmnElement="End_C_LoginFail">
+        <dc:Bounds x="372" y="522" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <!-- Client Nodes - Lane 4 (Chat) -->
+      <bpmndi:BPMNShape id="Shape_Task_C_EncryptMsg" bpmnElement="Task_C_EncryptMsg">
+        <dc:Bounds x="202" y="620" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_SendChat" bpmnElement="Task_C_SendChat">
+        <dc:Bounds x="390" y="620" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_ReceiveMsg" bpmnElement="Task_C_ReceiveMsg">
+        <dc:Bounds x="580" y="620" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_DecryptMsg" bpmnElement="Task_C_DecryptMsg">
+        <dc:Bounds x="770" y="620" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_C_DisplayMsg" bpmnElement="Task_C_DisplayMsg">
+        <dc:Bounds x="960" y="620" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_C" bpmnElement="End_C">
+        <dc:Bounds x="1152" y="642" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <!-- ─── POOL SERVER ─── -->
+      <bpmndi:BPMNShape id="Shape_Pool_Server" bpmnElement="Pool_Server" isHorizontal="true">
+        <dc:Bounds x="120" y="800" width="1600" height="640" />
+      </bpmndi:BPMNShape>
+
+      <!-- Lane RSA -->
+      <bpmndi:BPMNShape id="Shape_Lane_S_RSA" bpmnElement="Lane_S_RSA" isHorizontal="true">
+        <dc:Bounds x="150" y="800" width="1570" height="160" />
+      </bpmndi:BPMNShape>
+
+      <!-- Lane Auth -->
+      <bpmndi:BPMNShape id="Shape_Lane_S_Auth" bpmnElement="Lane_S_Auth" isHorizontal="true">
+        <dc:Bounds x="150" y="960" width="1570" height="220" />
+      </bpmndi:BPMNShape>
+
+      <!-- Lane Chat -->
+      <bpmndi:BPMNShape id="Shape_Lane_S_Chat" bpmnElement="Lane_S_Chat" isHorizontal="true">
+        <dc:Bounds x="150" y="1180" width="1570" height="260" />
+      </bpmndi:BPMNShape>
+
+      <!-- Server Nodes - Lane RSA -->
+      <bpmndi:BPMNShape id="Shape_Start_S" bpmnElement="Start_S">
+        <dc:Bounds x="202" y="862" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SendPubKey" bpmnElement="Task_S_SendPubKey">
+        <dc:Bounds x="290" y="840" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_ReceiveKeyExchange" bpmnElement="Task_S_ReceiveKeyExchange">
+        <dc:Bounds x="480" y="840" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_DecryptAESWithRSA" bpmnElement="Task_S_DecryptAESWithRSA">
+        <dc:Bounds x="670" y="840" width="140" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Server Nodes - Lane Auth -->
+      <bpmndi:BPMNShape id="Shape_Task_S_ReceiveLoginReq" bpmnElement="Task_S_ReceiveLoginReq">
+        <dc:Bounds x="202" y="990" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_CheckDB" bpmnElement="Task_S_CheckDB">
+        <dc:Bounds x="390" y="990" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_GW_S_ValidCred" bpmnElement="GW_S_ValidCred" isMarkerVisible="true">
+        <dc:Bounds x="580" y="1005" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SendLoginFail" bpmnElement="Task_S_SendLoginFail">
+        <dc:Bounds x="580" y="1090" width="140" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_GenerateToken" bpmnElement="Task_S_GenerateToken">
+        <dc:Bounds x="680" y="980" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SendLoginOK" bpmnElement="Task_S_SendLoginOK">
+        <dc:Bounds x="870" y="980" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_LogSession" bpmnElement="Task_S_LogSession">
+        <dc:Bounds x="1060" y="980" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SendHistory" bpmnElement="Task_S_SendHistory">
+        <dc:Bounds x="1250" y="980" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SendPendingMsg" bpmnElement="Task_S_SendPendingMsg">
+        <dc:Bounds x="1440" y="980" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SendNewToken" bpmnElement="Task_S_SendNewToken">
+        <dc:Bounds x="1440" y="1090" width="140" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- Server Nodes - Lane Chat (Triple Cipher) -->
+      <bpmndi:BPMNShape id="Shape_Task_S_ReceiveChat" bpmnElement="Task_S_ReceiveChat">
+        <dc:Bounds x="202" y="1270" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_ValidateToken" bpmnElement="Task_S_ValidateToken">
+        <dc:Bounds x="390" y="1270" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_GW_S_TokenValid" bpmnElement="GW_S_TokenValid" isMarkerVisible="true">
+        <dc:Bounds x="580" y="1285" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SendError" bpmnElement="Task_S_SendError">
+        <dc:Bounds x="580" y="1370" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_DecryptFromSender" bpmnElement="Task_S_DecryptFromSender">
+        <dc:Bounds x="680" y="1270" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_SaveDB" bpmnElement="Task_S_SaveDB">
+        <dc:Bounds x="870" y="1270" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_GW_S_RecipientOnline" bpmnElement="GW_S_RecipientOnline" isMarkerVisible="true">
+        <dc:Bounds x="1060" y="1285" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_ForwardMsg" bpmnElement="Task_S_ForwardMsg">
+        <dc:Bounds x="1160" y="1250" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_MarkDelivered" bpmnElement="Task_S_MarkDelivered">
+        <dc:Bounds x="1350" y="1250" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_S_PendingInDB" bpmnElement="Task_S_PendingInDB">
+        <dc:Bounds x="1160" y="1360" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_S" bpmnElement="End_S">
+        <dc:Bounds x="1542" y="1292" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_S_Error" bpmnElement="End_S_Error">
+        <dc:Bounds x="762" y="1402" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <!-- ─── SEQUENCE FLOWS CLIENT ─── -->
+      <bpmndi:BPMNEdge id="Edge_SF_C1" bpmnElement="SF_C1"><di:waypoint x="238" y="160" /><di:waypoint x="238" y="300" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C2" bpmnElement="SF_C2"><di:waypoint x="342" y="300" /><di:waypoint x="390" y="300" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C3" bpmnElement="SF_C3"><di:waypoint x="530" y="300" /><di:waypoint x="580" y="300" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C4" bpmnElement="SF_C4"><di:waypoint x="720" y="300" /><di:waypoint x="770" y="300" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C5" bpmnElement="SF_C5"><di:waypoint x="910" y="300" /><di:waypoint x="910" y="160" /><di:waypoint x="480" y="160" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C6" bpmnElement="SF_C6"><di:waypoint x="620" y="160" /><di:waypoint x="660" y="160" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C7" bpmnElement="SF_C7"><di:waypoint x="800" y="160" /><di:waypoint x="840" y="160" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C8a" bpmnElement="SF_C8a"><di:waypoint x="865" y="135" /><di:waypoint x="865" y="110" /><di:waypoint x="940" y="110" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C8b" bpmnElement="SF_C8b"><di:waypoint x="865" y="185" /><di:waypoint x="865" y="210" /><di:waypoint x="940" y="210" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C9" bpmnElement="SF_C9"><di:waypoint x="1080" y="140" /><di:waypoint x="1120" y="140" /><di:waypoint x="1120" y="460" /><di:waypoint x="202" y="460" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C10" bpmnElement="SF_C10"><di:waypoint x="1080" y="200" /><di:waypoint x="1130" y="200" /><di:waypoint x="1130" y="455" /><di:waypoint x="342" y="455" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C11a" bpmnElement="SF_C11a"><di:waypoint x="342" y="460" /><di:waypoint x="390" y="460" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C11b" bpmnElement="SF_C11b"><di:waypoint x="272" y="500" /><di:waypoint x="272" y="540" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C12" bpmnElement="SF_C12"><di:waypoint x="530" y="460" /><di:waypoint x="580" y="460" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C13" bpmnElement="SF_C13"><di:waypoint x="720" y="460" /><di:waypoint x="770" y="460" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C14" bpmnElement="SF_C14"><di:waypoint x="910" y="460" /><di:waypoint x="960" y="460" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C15a" bpmnElement="SF_C15a"><di:waypoint x="1010" y="460" /><di:waypoint x="1060" y="460" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C15b" bpmnElement="SF_C15b"><di:waypoint x="985" y="485" /><di:waypoint x="985" y="660" /><di:waypoint x="202" y="660" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C16" bpmnElement="SF_C16"><di:waypoint x="1200" y="460" /><di:waypoint x="1250" y="460" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C17" bpmnElement="SF_C17"><di:waypoint x="1390" y="460" /><di:waypoint x="1430" y="460" /><di:waypoint x="1430" y="660" /><di:waypoint x="202" y="660" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C18" bpmnElement="SF_C18"><di:waypoint x="342" y="660" /><di:waypoint x="390" y="660" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C19" bpmnElement="SF_C19"><di:waypoint x="530" y="660" /><di:waypoint x="580" y="660" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C20" bpmnElement="SF_C20"><di:waypoint x="720" y="660" /><di:waypoint x="770" y="660" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C21" bpmnElement="SF_C21"><di:waypoint x="910" y="660" /><di:waypoint x="960" y="660" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_C22" bpmnElement="SF_C22"><di:waypoint x="1100" y="660" /><di:waypoint x="1152" y="660" /></bpmndi:BPMNEdge>
+
+      <!-- ─── SEQUENCE FLOWS SERVER ─── -->
+      <bpmndi:BPMNEdge id="Edge_SF_S1" bpmnElement="SF_S1"><di:waypoint x="238" y="880" /><di:waypoint x="290" y="880" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S2" bpmnElement="SF_S2"><di:waypoint x="430" y="880" /><di:waypoint x="480" y="880" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S3" bpmnElement="SF_S3"><di:waypoint x="620" y="880" /><di:waypoint x="670" y="880" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S4" bpmnElement="SF_S4"><di:waypoint x="810" y="880" /><di:waypoint x="810" y="1030" /><di:waypoint x="202" y="1030" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S5" bpmnElement="SF_S5"><di:waypoint x="342" y="1030" /><di:waypoint x="390" y="1030" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S6" bpmnElement="SF_S6"><di:waypoint x="530" y="1030" /><di:waypoint x="580" y="1030" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S7a" bpmnElement="SF_S7a"><di:waypoint x="630" y="1005" /><di:waypoint x="680" y="1005" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S7b" bpmnElement="SF_S7b"><di:waypoint x="605" y="1055" /><di:waypoint x="605" y="1090" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S8" bpmnElement="SF_S8"><di:waypoint x="720" y="1120" /><di:waypoint x="762" y="1120" /><di:waypoint x="762" y="1420" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S9" bpmnElement="SF_S9"><di:waypoint x="820" y="1020" /><di:waypoint x="870" y="1020" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S10" bpmnElement="SF_S10"><di:waypoint x="1010" y="1020" /><di:waypoint x="1060" y="1020" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S11" bpmnElement="SF_S11"><di:waypoint x="1200" y="1020" /><di:waypoint x="1250" y="1020" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S12" bpmnElement="SF_S12"><di:waypoint x="1390" y="1020" /><di:waypoint x="1440" y="1020" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S13" bpmnElement="SF_S13"><di:waypoint x="1510" y="1060" /><di:waypoint x="1510" y="1310" /><di:waypoint x="342" y="1310" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S_TR" bpmnElement="SF_S_TR"><di:waypoint x="1510" y="1170" /><di:waypoint x="1510" y="1320" /><di:waypoint x="342" y="1320" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S14" bpmnElement="SF_S14"><di:waypoint x="342" y="1310" /><di:waypoint x="390" y="1310" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S15" bpmnElement="SF_S15"><di:waypoint x="530" y="1310" /><di:waypoint x="580" y="1310" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S16a" bpmnElement="SF_S16a"><di:waypoint x="630" y="1310" /><di:waypoint x="680" y="1310" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S16b" bpmnElement="SF_S16b"><di:waypoint x="605" y="1335" /><di:waypoint x="605" y="1370" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S17" bpmnElement="SF_S17"><di:waypoint x="720" y="1410" /><di:waypoint x="762" y="1410" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S18" bpmnElement="SF_S18"><di:waypoint x="820" y="1310" /><di:waypoint x="870" y="1310" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S19" bpmnElement="SF_S19"><di:waypoint x="1010" y="1310" /><di:waypoint x="1060" y="1310" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S20a" bpmnElement="SF_S20a"><di:waypoint x="1110" y="1310" /><di:waypoint x="1160" y="1290" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S20b" bpmnElement="SF_S20b"><di:waypoint x="1085" y="1335" /><di:waypoint x="1085" y="1400" /><di:waypoint x="1160" y="1400" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S21" bpmnElement="SF_S21"><di:waypoint x="1300" y="1290" /><di:waypoint x="1350" y="1290" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S22" bpmnElement="SF_S22"><di:waypoint x="1490" y="1290" /><di:waypoint x="1542" y="1310" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_SF_S23" bpmnElement="SF_S23"><di:waypoint x="1300" y="1400" /><di:waypoint x="1542" y="1320" /></bpmndi:BPMNEdge>
+
+      <!-- ─── MESSAGE FLOWS ─── -->
+      <bpmndi:BPMNEdge id="Edge_MF_PubKey" bpmnElement="MF_PubKey">
+        <di:waypoint x="360" y="840" /><di:waypoint x="360" y="760" /><di:waypoint x="272" y="760" /><di:waypoint x="272" y="340" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MF_KeyExchange" bpmnElement="MF_KeyExchange">
+        <di:waypoint x="840" y="300" /><di:waypoint x="840" y="760" /><di:waypoint x="550" y="760" /><di:waypoint x="550" y="880" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MF_LoginSuccess" bpmnElement="MF_LoginSuccess">
+        <di:waypoint x="940" y="1020" /><di:waypoint x="940" y="780" /><di:waypoint x="272" y="780" /><di:waypoint x="272" y="500" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MF_LoginFail" bpmnElement="MF_LoginFail">
+        <di:waypoint x="650" y="1090" /><di:waypoint x="650" y="770" /><di:waypoint x="272" y="770" /><di:waypoint x="272" y="510" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MF_ChatMsg" bpmnElement="MF_ChatMsg">
+        <di:waypoint x="460" y="700" /><di:waypoint x="460" y="750" /><di:waypoint x="272" y="750" /><di:waypoint x="272" y="1270" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MF_MsgDelivery" bpmnElement="MF_MsgDelivery">
+        <di:waypoint x="1230" y="1290" /><di:waypoint x="1230" y="755" /><di:waypoint x="650" y="755" /><di:waypoint x="650" y="700" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MF_History" bpmnElement="MF_History">
+        <di:waypoint x="1320" y="1020" /><di:waypoint x="1320" y="765" /><di:waypoint x="650" y="765" /><di:waypoint x="650" y="500" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_MF_TokenRefresh" bpmnElement="MF_TokenRefresh">
+        <di:waypoint x="1510" y="1090" /><di:waypoint x="1510" y="775" /><di:waypoint x="1320" y="775" /><di:waypoint x="1320" y="500" />
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
