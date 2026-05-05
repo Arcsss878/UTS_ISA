@@ -296,7 +296,7 @@ namespace UTS_ISA
             string time     = parts[4];
 
             // Dekripsi pesan dengan AES key milik user ini
-            string plain     = CryptoHelper.AesDecrypt(encMsg, aesKey, aesIv);
+            string plain     = CryptoHelper.AesDecryptMsg(encMsg, aesKey);
 
             // Tentukan "user lawan" sebagai key di chatHistories
             string otherUser = sender == username ? receiver : sender;
@@ -332,7 +332,7 @@ namespace UTS_ISA
             string time         = parts.Length >= 4 ? parts[3] : DateTime.Now.ToString("HH:mm");
 
             // Dekripsi pesan dengan AES key milik user ini
-            string plainMsg = CryptoHelper.AesDecrypt(encryptedMsg, aesKey, aesIv);
+            string plainMsg = CryptoHelper.AesDecryptMsg(encryptedMsg, aesKey);
             string entry    = "[" + time + "] " + from + ": " + plainMsg;
 
             // Simpan ke history
@@ -507,7 +507,8 @@ namespace UTS_ISA
 
             // Enkripsi pesan dengan AES key milik user ini
             // Server nanti akan dekripsi, lalu re-enkripsi pakai key milik penerima
-            string encryptedMsg = CryptoHelper.AesEncrypt(msg, aesKey, aesIv);
+            string encryptedMsg = CryptoHelper.AesEncryptMsg(msg, aesKey);
+            // ↑ AesEncryptMsg: IV baru random tiap pesan → ciphertext selalu berbeda
 
             // Kirim ke server dengan format: CHAT|from|to|encMsg|sessionToken
             // sessionToken wajib disertakan sebagai validasi sesi

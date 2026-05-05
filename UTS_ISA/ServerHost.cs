@@ -575,7 +575,7 @@ namespace UTS_ISA
             // Format tiap pesan: HISTORY|sender|receiver|encMsg|time
             foreach (var (s, r, plain, t) in ServerDb.GetAllMessages(_username))
             {
-                string reEnc = CryptoHelper.AesEncrypt(plain, _aesKey, _aesIv); // enkripsi ulang pakai key client ini
+                string reEnc = CryptoHelper.AesEncryptMsg(plain, _aesKey); // IV baru random tiap pesan
                 _writer.WriteLine($"HISTORY|{s}|{r}|{reEnc}|{t}"); // kirim ke client
             }
 
@@ -584,7 +584,7 @@ namespace UTS_ISA
             foreach (var (sender, plain, time) in ServerDb.GetPending(_username))
             {
                 if (string.IsNullOrEmpty(plain)) continue; // skip jika dekripsi gagal
-                string reEnc = CryptoHelper.AesEncrypt(plain, _aesKey, _aesIv); // enkripsi ulang
+                string reEnc = CryptoHelper.AesEncryptMsg(plain, _aesKey); // IV baru random tiap pesan
                 _writer.WriteLine($"MSG|{sender}|{reEnc}|{time}"); // kirim sebagai MSG biasa
             }
             // GetPending otomatis update delivered=1 setelah semua pesan diambil
@@ -633,7 +633,7 @@ namespace UTS_ISA
 
             // ── Dekripsi pesan dari sender ────────────────────────────────────
             // _aesKey/_aesIv di sini adalah key milik pengirim (dari key exchange saat login)
-            string plain = CryptoHelper.AesDecrypt(encMsg, _aesKey, _aesIv);
+            string plain = CryptoHelper.AesDecryptMsg(encMsg, _aesKey);
             // plain = isi pesan yang bisa dibaca manusia (contoh: "halo, apa kabar?")
 
             // ── Simpan ke DB ──────────────────────────────────────────────────
@@ -649,8 +649,7 @@ namespace UTS_ISA
             {
                 // Re-enkripsi plaintext dengan AES key milik recipient
                 // (key berbeda tiap client, jadi harus re-enkripsi dulu)
-                string reEnc = CryptoHelper.AesEncrypt(
-                    plain, recipient.AesKey, recipient.AesIv);
+                string reEnc = CryptoHelper.AesEncryptMsg(plain, recipient.AesKey);
                 try
                 {
                     recipient.Writer.WriteLine($"MSG|{from}|{reEnc}"); // kirim ke recipient

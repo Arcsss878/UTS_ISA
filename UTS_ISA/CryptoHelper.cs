@@ -68,6 +68,48 @@ namespace UTS_ISA
         /// <param name="key">AES key 32 byte (256-bit)</param>
         /// <param name="iv">AES IV 16 byte (128-bit)</param>
         /// <returns>Ciphertext dalam format Base64 (contoh: "X7kL9mN2pQ==")</returns>
+        // ════════════════════════════════════════════════════════════════════════
+        //  AesEncryptMsg / AesDecryptMsg  —  IV RANDOM per pesan (fix Pattern Attack)
+        //
+        //  Masalah IV tetap: "TEST" dikirim 3x → ciphertext SAMA (terlihat di Wireshark)
+        //  Fix: IV baru tiap pesan → Format: Base64(IV[16 byte] + ciphertext)
+        //  Hasil: "TEST" dikirim 3x → 3 ciphertext BERBEDA ✓
+        // ════════════════════════════════════════════════════════════════════════
+
+        /// <summary>Enkripsi pesan transit dengan IV RANDOM baru tiap pesan.</summary>
+        public static string AesEncryptMsg(string plainText, byte[] key)
+        {
+            byte[] iv = GenerateAesIv(); // IV baru random setiap pesan
+            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })
+            using (var ms = new MemoryStream())
+            using (var cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
+            {
+                byte[] data = Encoding.UTF8.GetBytes(plainText);
+                cs.Write(data, 0, data.Length);
+                cs.FlushFinalBlock();
+                byte[] cipher   = ms.ToArray();
+                byte[] combined = new byte[iv.Length + cipher.Length];
+                Buffer.BlockCopy(iv,     0, combined, 0,         iv.Length);
+                Buffer.BlockCopy(cipher, 0, combined, iv.Length, cipher.Length);
+                return Convert.ToBase64String(combined);
+            }
+        }
+
+        /// <summary>Dekripsi pesan dari AesEncryptMsg (ekstrak IV dari 16 byte pertama).</summary>
+        public static string AesDecryptMsg(string combinedBase64, byte[] key)
+        {
+            byte[] combined = Convert.FromBase64String(combinedBase64);
+            byte[] iv     = new byte[16];
+            byte[] cipher = new byte[combined.Length - 16];
+            Buffer.BlockCopy(combined,  0, iv,     0, 16);
+            Buffer.BlockCopy(combined, 16, cipher, 0, cipher.Length);
+            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })
+            using (var ms = new MemoryStream(cipher))
+            using (var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read))
+            using (var sr = new StreamReader(cs))
+            { return sr.ReadToEnd(); }
+        }
+
         public static string AesEncrypt(string plainText, byte[] key, byte[] iv)
         {
             using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })

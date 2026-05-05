@@ -65,6 +65,78 @@ namespace UTS_ISA.users
         /// <param name="key">AES key 32 byte (256-bit)</param>
         /// <param name="iv">AES IV 16 byte (128-bit)</param>
         /// <returns>Ciphertext dalam format Base64 (contoh: "X7kL9mN2pQ==")</returns>
+        // ════════════════════════════════════════════════════════════════════════
+        //  AesEncryptMsg / AesDecryptMsg  —  enkripsi pesan dengan IV RANDOM per pesan
+        //
+        //  Masalah jika pakai IV tetap per sesi:
+        //    Pesan "TEST" dikirim 3x → ciphertext SAMA → penyerang bisa kenali pola
+        //    Ini disebut Pattern Recognition / Known-Plaintext Attack vulnerability
+        //
+        //  Solusi: generate IV baru setiap kali enkripsi (per-message IV)
+        //    Format output: Base64(IV[16 byte] + ciphertext)
+        //    Saat dekripsi: ambil 16 byte pertama sebagai IV, sisanya sebagai ciphertext
+        //
+        //  Efek: pesan "TEST" dikirim 3x → 3 ciphertext BERBEDA ✓
+        // ════════════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Enkripsi pesan transit dengan IV RANDOM baru setiap kali dipanggil.
+        /// Output: Base64(IV[16 byte] + ciphertext) — IV berbeda tiap pesan.
+        /// Dipakai untuk semua pesan CHAT, MSG, HISTORY di jaringan.
+        /// </summary>
+        public static string AesEncryptMsg(string plainText, byte[] key)
+        {
+            byte[] iv = GenerateAesIv();
+            // ↑ Generate IV baru 16 byte secara random setiap kali
+            // Inilah perbedaan utama: IV tidak lagi tetap per sesi
+
+            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })
+            using (var ms = new MemoryStream())
+            using (var cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
+            {
+                byte[] data = Encoding.UTF8.GetBytes(plainText);
+                cs.Write(data, 0, data.Length);
+                cs.FlushFinalBlock();
+                byte[] cipher = ms.ToArray();
+
+                // Gabungkan IV + ciphertext menjadi satu array
+                // Format: [IV 16 byte][ciphertext N byte]
+                byte[] combined = new byte[iv.Length + cipher.Length];
+                Buffer.BlockCopy(iv, 0, combined, 0, iv.Length);
+                Buffer.BlockCopy(cipher, 0, combined, iv.Length, cipher.Length);
+                // ↑ Buffer.BlockCopy = copy byte array dengan efisien
+
+                return Convert.ToBase64String(combined);
+                // ↑ Encode ke Base64 agar bisa dikirim sebagai teks
+                // Penerima akan decode Base64 → ambil 16 byte pertama = IV
+            }
+        }
+
+        /// <summary>
+        /// Dekripsi pesan yang dienkripsi dengan AesEncryptMsg.
+        /// Ekstrak IV dari 16 byte pertama, sisanya ciphertext.
+        /// </summary>
+        public static string AesDecryptMsg(string combinedBase64, byte[] key)
+        {
+            byte[] combined = Convert.FromBase64String(combinedBase64);
+            // ↑ Decode Base64 → byte array yang berisi IV + ciphertext
+
+            byte[] iv     = new byte[16];
+            byte[] cipher = new byte[combined.Length - 16];
+            Buffer.BlockCopy(combined, 0,  iv,     0, 16);
+            Buffer.BlockCopy(combined, 16, cipher, 0, cipher.Length);
+            // ↑ Pisahkan: 16 byte pertama = IV, sisanya = ciphertext
+
+            using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })
+            using (var ms = new MemoryStream(cipher))
+            using (var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read))
+            using (var sr = new StreamReader(cs))
+            {
+                return sr.ReadToEnd();
+                // ↑ Dekripsi dengan IV yang tepat → plaintext asli
+            }
+        }
+
         public static string AesEncrypt(string plainText, byte[] key, byte[] iv)
         {
             using (var aes = new AesCryptoServiceProvider { Key = key, IV = iv })
