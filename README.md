@@ -3,6 +3,8 @@
 Aplikasi chat berbasis TCP dengan enkripsi end-to-end menggunakan **RSA-2048** dan **AES-256**.  
 Dibangun dengan C# WinForms (.NET Framework 4.7.2).
 
+> 📄 **[Lihat Analisis Desain Keamanan Data lengkap → SECURITY_ANALYSIS.md](./SECURITY_ANALYSIS.md)**
+
 ---
 
 ## Daftar Isi
