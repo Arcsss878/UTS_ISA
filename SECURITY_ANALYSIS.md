@@ -40,30 +40,30 @@ Menurut NIST SP 800-27 Rev A, desain keamanan yang baik harus memenuhi tiga prin
 Aplikasi ini mengimplementasikan **tiga lapisan enkripsi** yang bekerja secara bersamaan:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TRIPLE CIPHER ARCHITECTURE                   │
-│                                                                 │
-│  LAYER 1 — Transit Security (AES-256-CBC + RSA-2048)           │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Semua pesan di jaringan dienkripsi AES-256              │   │
-│  │  AES key ditukar secara aman lewat RSA-2048              │   │
-│  │  Proteksi: Man-in-the-Middle, Eavesdropping              │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  LAYER 2 — Database Audit Trail (AES session key sender)       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Ciphertext asli sender disimpan di message_encrypted    │   │
-│  │  Key sender hilang setelah logout → tidak bisa dibuka    │   │
-│  │  Proteksi: Insider threat, DB compromise                 │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
+┌───────────────────────────────────────────────────────────────┐
+│                    TRIPLE CIPHER ARCHITECTURE                 │
+│                                                               │
+│  LAYER 1 — Transit Security (AES-256-CBC + RSA-2048)          │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  Semua pesan di jaringan dienkripsi AES-256             │  │
+│  │  AES key ditukar secara aman lewat RSA-2048             │  │
+│  │  Proteksi: Man-in-the-Middle, Eavesdropping             │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  LAYER 2 — Database Audit Trail (AES session key sender)      │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  Ciphertext asli sender disimpan di message_encrypted   │  │
+│  │  Key sender hilang setelah logout → tidak bisa dibuka   │  │
+│  │  Proteksi: Insider threat, DB compromise                │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
 │  LAYER 3 — Database Encryption (AES-256 + fixed DB key)       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Plaintext dienkripsi DB key sebelum disimpan           │   │
-│  │  Kolom message_backup tidak terbaca di phpMyAdmin        │   │
-│  │  Proteksi: Direct DB access, Data breach                 │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  Plaintext dienkripsi DB key sebelum disimpan           │  │
+│  │  Kolom message_backup tidak terbaca di phpMyAdmin       │  │
+│  │  Proteksi: Direct DB access, Data breach                │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### Komponen Keamanan
